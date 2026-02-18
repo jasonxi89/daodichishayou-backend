@@ -4,3 +4,8 @@ sqlalchemy==2.0.36
 pydantic==2.10.4
 apscheduler==3.10.4
 httpx==0.28.1
+anthropic>=0.34.0
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov>=4.1
+respx>=0.21

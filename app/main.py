@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import CRAWL_INTERVAL_HOURS
 from app.crawler.scheduler import scheduled_crawl, seed_data
 from app.database import Base, engine
-from app.routers import trending
+from app.routers import trending, recommend
 from app.schemas import HealthResponse
 
 logging.basicConfig(
@@ -51,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(trending.router)
+app.include_router(recommend.router)
 
 
 @app.get("/api/health", response_model=HealthResponse)

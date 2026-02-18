@@ -40,3 +40,23 @@ class CrawlResult(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+
+
+class IngredientRecommendRequest(BaseModel):
+    ingredients: list[str]
+    count: int = 3
+    preferences: str | None = None
+
+
+class RecommendedDish(BaseModel):
+    name: str
+    summary: str
+    ingredients: list[str]
+    steps: list[str]
+    difficulty: str | None = None
+    cook_time: str | None = None
+
+
+class IngredientRecommendResponse(BaseModel):
+    dishes: list[RecommendedDish]
+    input_ingredients: list[str]
