@@ -163,3 +163,89 @@ def test_recommend_empty_dishes_list(client, monkeypatch):
         resp = client.post("/api/recommend", json={"ingredients": ["未知食材"]})
         assert resp.status_code == 200
         assert resp.json()["dishes"] == []
+
+
+def test_recommend_allow_extra_uses_extra_prompt(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post(
+            "/api/recommend",
+            json={"ingredients": ["番茄"], "allow_extra": True},
+        )
+        assert resp.status_code == 200
+        call_args = mock_client.messages.create.call_args
+        system_prompt = call_args[1]["system"]
+        from app.routers.recommend import SYSTEM_PROMPT_EXTRA
+        assert system_prompt == SYSTEM_PROMPT_EXTRA
+
+
+def test_recommend_default_uses_standard_prompt(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post(
+            "/api/recommend",
+            json={"ingredients": ["番茄"]},
+        )
+        assert resp.status_code == 200
+        call_args = mock_client.messages.create.call_args
+        system_prompt = call_args[1]["system"]
+        from app.routers.recommend import SYSTEM_PROMPT
+        assert system_prompt == SYSTEM_PROMPT
+
+
+def test_recommend_extra_ingredients_parsed(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        extra_json = json.dumps({
+            "dishes": [
+                {
+                    "name": "番茄牛腩",
+                    "summary": "经典炖菜",
+                    "ingredients": ["番茄2个", "牛腩500g", "盐适量"],
+                    "steps": ["牛腩焯水", "番茄切块", "炖煮1小时"],
+                    "difficulty": "中等",
+                    "cook_time": "约70分钟",
+                    "extra_ingredients": ["牛腩"],
+                }
+            ]
+        })
+        mock_client.messages.create.return_value = make_claude_response(extra_json)
+
+        resp = client.post(
+            "/api/recommend",
+            json={"ingredients": ["番茄"], "allow_extra": True},
+        )
+        assert resp.status_code == 200
+        dish = resp.json()["dishes"][0]
+        assert dish["extra_ingredients"] == ["牛腩"]
+
+
+def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post(
+            "/api/recommend",
+            json={
+                "ingredients": ["番茄", "鸡蛋"],
+                "exclude_dishes": ["番茄炒蛋", "蛋花汤"],
+            },
+        )
+        assert resp.status_code == 200
+        call_args = mock_client.messages.create.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "番茄炒蛋" in user_content
+        assert "蛋花汤" in user_content

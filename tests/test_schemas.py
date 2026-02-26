@@ -59,3 +59,36 @@ def test_trending_response():
     r = TrendingResponse(total=0, items=[])
     assert r.total == 0
     assert r.items == []
+
+
+def test_ingredient_recommend_request_allow_extra_default():
+    from app.schemas import IngredientRecommendRequest
+    req = IngredientRecommendRequest(ingredients=["番茄"])
+    assert req.allow_extra is False
+
+
+def test_ingredient_recommend_request_exclude_dishes_default():
+    from app.schemas import IngredientRecommendRequest
+    req = IngredientRecommendRequest(ingredients=["番茄"])
+    assert req.exclude_dishes == []
+
+
+def test_recommended_dish_extra_ingredients():
+    from app.schemas import RecommendedDish
+    d = RecommendedDish(
+        name="番茄牛腩",
+        summary="经典炖菜",
+        ingredients=["番茄", "牛腩"],
+        steps=["炖煮"],
+        extra_ingredients=["牛腩"],
+    )
+    assert d.extra_ingredients == ["牛腩"]
+
+    # Also verify default is None when not provided
+    d2 = RecommendedDish(
+        name="番茄炒蛋",
+        summary="家常菜",
+        ingredients=["番茄", "鸡蛋"],
+        steps=["炒"],
+    )
+    assert d2.extra_ingredients is None

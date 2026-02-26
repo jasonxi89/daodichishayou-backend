@@ -46,6 +46,8 @@ class IngredientRecommendRequest(BaseModel):
     ingredients: list[str]
     count: int = 3
     preferences: str | None = None
+    allow_extra: bool = False
+    exclude_dishes: list[str] = []
 
 
 class RecommendedDish(BaseModel):
@@ -55,6 +57,7 @@ class RecommendedDish(BaseModel):
     steps: list[str]
     difficulty: str | None = None
     cook_time: str | None = None
+    extra_ingredients: list[str] | None = None
 
 
 class IngredientRecommendResponse(BaseModel):
