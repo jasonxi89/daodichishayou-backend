@@ -92,3 +92,24 @@ def test_recommended_dish_extra_ingredients():
         steps=["炒"],
     )
     assert d2.extra_ingredients is None
+
+
+def test_generate_foods_request_defaults():
+    from app.schemas import GenerateFoodsRequest
+    req = GenerateFoodsRequest(category="川菜")
+    assert req.category == "川菜"
+    assert req.count == 30
+
+
+def test_generate_foods_request_custom():
+    from app.schemas import GenerateFoodsRequest
+    req = GenerateFoodsRequest(category="粤菜", count=10)
+    assert req.category == "粤菜"
+    assert req.count == 10
+
+
+def test_generate_foods_response():
+    from app.schemas import GenerateFoodsResponse
+    resp = GenerateFoodsResponse(foods=["火锅", "串串香"], category="川菜")
+    assert resp.foods == ["火锅", "串串香"]
+    assert resp.category == "川菜"

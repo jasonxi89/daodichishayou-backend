@@ -63,3 +63,13 @@ class RecommendedDish(BaseModel):
 class IngredientRecommendResponse(BaseModel):
     dishes: list[RecommendedDish]
     input_ingredients: list[str]
+
+
+class GenerateFoodsRequest(BaseModel):
+    category: str
+    count: int = 30
+
+
+class GenerateFoodsResponse(BaseModel):
+    foods: list[str]
+    category: str

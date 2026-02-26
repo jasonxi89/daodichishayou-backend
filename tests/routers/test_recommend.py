@@ -249,3 +249,89 @@ def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
         user_content = call_args[1]["messages"][0]["content"]
         assert "番茄炒蛋" in user_content
         assert "蛋花汤" in user_content
+
+
+# --- foods-by-category tests ---
+
+VALID_FOODS_JSON = json.dumps({"foods": ["火锅", "串串香", "麻婆豆腐"]})
+
+
+def test_foods_by_category_success(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_FOODS_JSON)
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["foods"] == ["火锅", "串串香", "麻婆豆腐"]
+        assert data["category"] == "川菜"
+
+
+def test_foods_by_category_no_api_key(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "")
+    resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+    assert resp.status_code == 500
+    assert "CLAUDE_API_KEY" in resp.json()["detail"]
+
+
+def test_foods_by_category_json_parse_fail(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response("not valid json")
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 502
+
+
+def test_foods_by_category_api_error(client, monkeypatch):
+    import anthropic as anthropic_module
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.side_effect = anthropic_module.APIError(
+            message="API error", request=MagicMock(), body=None
+        )
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 502
+
+
+def test_foods_by_category_strips_markdown_fence(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        fenced = f"```json\n{VALID_FOODS_JSON}\n```"
+        mock_client.messages.create.return_value = make_claude_response(fenced)
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 200
+        assert resp.json()["foods"] == ["火锅", "串串香", "麻婆豆腐"]
+
+
+def test_foods_by_category_count_clamped(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_FOODS_JSON)
+
+        # count=100 should be clamped to 50
+        resp = client.post("/api/foods-by-category", json={"category": "川菜", "count": 100})
+        assert resp.status_code == 200
+        call_args = mock_client.messages.create.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "50" in user_content
+
+        # count=0 should be clamped to 1
+        resp = client.post("/api/foods-by-category", json={"category": "川菜", "count": 0})
+        assert resp.status_code == 200
+        call_args = mock_client.messages.create.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "1" in user_content
