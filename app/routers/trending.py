@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/trending", tags=["trending"])
 
 @router.get("", response_model=TrendingResponse)
 def get_trending(
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     source: str | None = Query(None),
     category: str | None = Query(None),

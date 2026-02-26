@@ -129,7 +129,7 @@ def test_import_preserves_category(client):
 
 
 def test_get_trending_limit_max(client):
-    resp = client.get("/api/trending?limit=101")
+    resp = client.get("/api/trending?limit=201")
     assert resp.status_code == 422  # validation error
 
 
