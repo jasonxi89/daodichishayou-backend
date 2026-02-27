@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -329,9 +330,216 @@ def test_foods_by_category_count_clamped(client, monkeypatch):
         user_content = call_args[1]["messages"][0]["content"]
         assert "50" in user_content
 
-        # count=0 should be clamped to 1
-        resp = client.post("/api/foods-by-category", json={"category": "川菜", "count": 0})
+        # count=0 should be clamped to 1 (use different category to avoid cache hit)
+        resp = client.post("/api/foods-by-category", json={"category": "粤菜", "count": 0})
         assert resp.status_code == 200
         call_args = mock_client.messages.create.call_args
         user_content = call_args[1]["messages"][0]["content"]
         assert "1" in user_content
+
+
+# --- foods-by-category cache tests ---
+
+
+def test_foods_by_category_cache_hit(client, db, monkeypatch):
+    """When a valid (non-expired) cache exists, Claude API should NOT be called."""
+    from app.models import FoodsCategoryCache
+
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+
+    # Pre-insert a cache row with future expires_at
+    cache_entry = FoodsCategoryCache(
+        category="川菜",
+        foods=json.dumps(["回锅肉", "宫保鸡丁"], ensure_ascii=False),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+    )
+    db.add(cache_entry)
+    db.commit()
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["foods"] == ["回锅肉", "宫保鸡丁"]
+        assert data["category"] == "川菜"
+        # Claude API should NOT have been called
+        mock_client.messages.create.assert_not_called()
+
+
+def test_foods_by_category_cache_miss(client, db, monkeypatch):
+    """When no cache exists, Claude API should be called and result stored in cache."""
+    from app.models import FoodsCategoryCache
+
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_FOODS_JSON)
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["foods"] == ["火锅", "串串香", "麻婆豆腐"]
+        # Claude API should have been called
+        mock_client.messages.create.assert_called_once()
+
+    # Verify cache was stored in DB
+    cached = db.query(FoodsCategoryCache).filter(FoodsCategoryCache.category == "川菜").first()
+    assert cached is not None
+    assert json.loads(cached.foods) == ["火锅", "串串香", "麻婆豆腐"]
+    # SQLite returns naive datetimes; compare naive-to-naive
+    assert cached.expires_at > datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def test_foods_by_category_cache_expired(client, db, monkeypatch):
+    """When cache is expired, Claude API should be called (expired cache ignored)."""
+    from app.models import FoodsCategoryCache
+
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+
+    # Insert an expired cache row
+    cache_entry = FoodsCategoryCache(
+        category="川菜",
+        foods=json.dumps(["old_food"], ensure_ascii=False),
+        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    db.add(cache_entry)
+    db.commit()
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_FOODS_JSON)
+
+        resp = client.post("/api/foods-by-category", json={"category": "川菜"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["foods"] == ["火锅", "串串香", "麻婆豆腐"]
+        # Claude API should have been called (expired cache ignored)
+        mock_client.messages.create.assert_called_once()
+
+
+# --- bulk-foods-by-category tests ---
+
+VALID_BULK_FOODS_JSON = json.dumps({
+    "家常下饭": ["红烧肉", "番茄炒蛋", "宫保鸡丁"],
+    "火锅烫涮": ["四川火锅", "潮汕牛肉锅", "酸汤火锅"],
+})
+
+
+def test_bulk_all_cached(client, db, monkeypatch):
+    """When all requested categories are cached, Claude API should NOT be called."""
+    from app.models import FoodsCategoryCache
+
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+
+    for cat, foods in [("家常下饭", ["红烧肉", "番茄炒蛋"]), ("火锅烫涮", ["四川火锅", "酸汤火锅"])]:
+        db.add(FoodsCategoryCache(
+            category=cat,
+            foods=json.dumps(foods, ensure_ascii=False),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+        ))
+    db.commit()
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+
+        resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭", "火锅烫涮"]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["results"]["家常下饭"] == ["红烧肉", "番茄炒蛋"]
+        assert data["results"]["火锅烫涮"] == ["四川火锅", "酸汤火锅"]
+        mock_client.messages.create.assert_not_called()
+
+
+def test_bulk_none_cached(client, monkeypatch):
+    """When no categories are cached, Claude API should be called once."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_BULK_FOODS_JSON)
+
+        resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭", "火锅烫涮"]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "家常下饭" in data["results"]
+        assert "火锅烫涮" in data["results"]
+        mock_client.messages.create.assert_called_once()
+
+
+def test_bulk_partial_cache(client, db, monkeypatch):
+    """When some categories are cached and some are not, only uncached are sent to Claude."""
+    from app.models import FoodsCategoryCache
+
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+
+    # Cache only 家常下饭
+    db.add(FoodsCategoryCache(
+        category="家常下饭",
+        foods=json.dumps(["回锅肉"], ensure_ascii=False),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+    ))
+    db.commit()
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        # Claude returns only the uncached category
+        uncached_json = json.dumps({"火锅烫涮": ["四川火锅", "潮汕牛肉锅"]})
+        mock_client.messages.create.return_value = make_claude_response(uncached_json)
+
+        resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭", "火锅烫涮"]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["results"]["家常下饭"] == ["回锅肉"]
+        assert data["results"]["火锅烫涮"] == ["四川火锅", "潮汕牛肉锅"]
+        mock_client.messages.create.assert_called_once()
+        # Verify the prompt only contains uncached category
+        call_args = mock_client.messages.create.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "火锅烫涮" in user_content
+        assert "家常下饭" not in user_content
+
+
+def test_bulk_no_api_key(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "")
+    resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
+    assert resp.status_code == 500
+    assert "CLAUDE_API_KEY" in resp.json()["detail"]
+
+
+def test_bulk_claude_error(client, monkeypatch):
+    import anthropic as anthropic_module
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.side_effect = anthropic_module.APIError(
+            message="API error", request=MagicMock(), body=None
+        )
+        resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
+        assert resp.status_code == 502
+
+
+def test_bulk_json_parse_error(client, monkeypatch):
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response("not valid json {{{")
+        resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
+        assert resp.status_code == 502
+
+
+def test_bulk_empty_categories(client, monkeypatch):
+    """Empty categories list should return empty results without calling Claude."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    resp = client.post("/api/bulk-foods-by-category", json={"categories": []})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == {}

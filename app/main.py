@@ -37,9 +37,11 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
 
 
+from app.config import APP_VERSION
+
 app = FastAPI(
     title="到底吃啥哟 - 美食热度API",
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -56,4 +58,4 @@ app.include_router(recommend.router)
 
 @app.get("/api/health", response_model=HealthResponse)
 def health_check():
-    return HealthResponse(status="ok", version="0.1.0")
+    return HealthResponse(status="ok", version=APP_VERSION)

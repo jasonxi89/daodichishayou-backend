@@ -73,3 +73,12 @@ class GenerateFoodsRequest(BaseModel):
 class GenerateFoodsResponse(BaseModel):
     foods: list[str]
     category: str
+
+
+class BulkGenerateFoodsRequest(BaseModel):
+    categories: list[str]
+    count: int = 30
+
+
+class BulkGenerateFoodsResponse(BaseModel):
+    results: dict[str, list[str]]

@@ -1,11 +1,17 @@
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 import anthropic
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from app.config import AI_CORE_RULES, CLAUDE_API_KEY
+from app.database import get_db
+from app.models import FoodsCategoryCache
 from app.schemas import (
+    BulkGenerateFoodsRequest,
+    BulkGenerateFoodsResponse,
     GenerateFoodsRequest,
     GenerateFoodsResponse,
     IngredientRecommendRequest,
@@ -14,6 +20,8 @@ from app.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+CATEGORY_CACHE_TTL = timedelta(days=1)
 
 router = APIRouter(prefix="/api", tags=["recommend"])
 
@@ -167,9 +175,24 @@ CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 
 
 @router.post("/foods-by-category", response_model=GenerateFoodsResponse)
-async def foods_by_category(req: GenerateFoodsRequest):
+async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get_db)):
     if not CLAUDE_API_KEY:
         raise HTTPException(status_code=500, detail="CLAUDE_API_KEY not configured")
+
+    # Check cache first
+    cached = (
+        db.query(FoodsCategoryCache)
+        .filter(
+            FoodsCategoryCache.category == req.category,
+            FoodsCategoryCache.expires_at > datetime.now(timezone.utc),
+        )
+        .first()
+    )
+    if cached:
+        return GenerateFoodsResponse(
+            foods=json.loads(cached.foods),
+            category=req.category,
+        )
 
     count = max(1, min(req.count, 50))
 
@@ -209,7 +232,137 @@ async def foods_by_category(req: GenerateFoodsRequest):
 
     foods = data.get("foods", [])
 
+    # Save to cache (upsert by category)
+    existing = (
+        db.query(FoodsCategoryCache)
+        .filter(FoodsCategoryCache.category == req.category)
+        .first()
+    )
+    if existing:
+        existing.foods = json.dumps(foods, ensure_ascii=False)
+        existing.expires_at = datetime.now(timezone.utc) + CATEGORY_CACHE_TTL
+        existing.created_at = datetime.now(timezone.utc)
+    else:
+        db.add(
+            FoodsCategoryCache(
+                category=req.category,
+                foods=json.dumps(foods, ensure_ascii=False),
+                expires_at=datetime.now(timezone.utc) + CATEGORY_CACHE_TTL,
+            )
+        )
+    db.commit()
+
     return GenerateFoodsResponse(
         foods=foods,
         category=req.category,
     )
+
+
+BULK_CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
+
+你是一位美食百科专家。用户会给你多个食物分类名称，你需要为每个分类列出属于该分类的真实食物名称。
+
+要求：
+1. 只列出真实存在的、广为人知的食物/菜品名称
+2. 名称要简洁（一般2-6个字），不需要描述
+3. 尽量覆盖该分类下不同风格和地域的代表性食物
+
+返回格式（纯JSON，无markdown）：
+{{{{"分类名1": ["食物1", "食物2"], "分类名2": ["食物3", "食物4"]}}}}"""
+
+
+@router.post("/bulk-foods-by-category", response_model=BulkGenerateFoodsResponse)
+async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = Depends(get_db)):
+    if not CLAUDE_API_KEY:
+        raise HTTPException(status_code=500, detail="CLAUDE_API_KEY not configured")
+
+    if not req.categories:
+        return BulkGenerateFoodsResponse(results={})
+
+    count = max(1, min(req.count, 50))
+    now = datetime.now(timezone.utc)
+
+    # Check cache for all requested categories
+    cached_rows = (
+        db.query(FoodsCategoryCache)
+        .filter(
+            FoodsCategoryCache.category.in_(req.categories),
+            FoodsCategoryCache.expires_at > now,
+        )
+        .all()
+    )
+
+    cached_results: dict[str, list[str]] = {}
+    for row in cached_rows:
+        cached_results[row.category] = json.loads(row.foods)
+
+    uncached_categories = [c for c in req.categories if c not in cached_results]
+
+    # All cached — return immediately without calling Claude
+    if not uncached_categories:
+        return BulkGenerateFoodsResponse(results=cached_results)
+
+    # Call Claude once for all uncached categories
+    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+
+    categories_text = "、".join(f"「{c}」" for c in uncached_categories)
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=8192,
+            system=BULK_CATEGORY_FOODS_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"请为以下分类各列出{count}个食物名称：{categories_text}",
+                }
+            ],
+        )
+    except anthropic.APIError as e:
+        logger.error("Claude API error: %s", e)
+        raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
+
+    raw_text = message.content[0].text.strip()
+
+    # Strip markdown code fences if present
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw_text = "\n".join(lines)
+
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        logger.error("Failed to parse Claude bulk response: %s", raw_text[:500])
+        raise HTTPException(status_code=502, detail="AI response format error")
+
+    # Upsert each category into cache
+    for category in uncached_categories:
+        foods = data.get(category, [])
+        if not isinstance(foods, list):
+            foods = []
+        cached_results[category] = foods
+
+        existing = (
+            db.query(FoodsCategoryCache)
+            .filter(FoodsCategoryCache.category == category)
+            .first()
+        )
+        if existing:
+            existing.foods = json.dumps(foods, ensure_ascii=False)
+            existing.expires_at = now + CATEGORY_CACHE_TTL
+            existing.created_at = now
+        else:
+            db.add(
+                FoodsCategoryCache(
+                    category=category,
+                    foods=json.dumps(foods, ensure_ascii=False),
+                    expires_at=now + CATEGORY_CACHE_TTL,
+                )
+            )
+
+    db.commit()
+
+    return BulkGenerateFoodsResponse(results=cached_results)
