@@ -4,13 +4,14 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.crawler.ai_extractor import extract_foods_from_titles
 from app.crawler.base import BaseCrawler, FoodTrendItem
 from app.crawler.baidu_suggest import BaiduSuggestCrawler
 from app.crawler.dailyhot import DailyHotCrawler
 from app.crawler.toutiao import ToutiaoCrawler
 from app.crawler.vvhan import VvhanCrawler
 from app.database import SessionLocal
-from app.models import CrawlLog, FoodTrend
+from app.models import AIDiscoveredFood, CrawlLog, FoodTrend
 from app.schemas import CrawlResult
 
 logger = logging.getLogger(__name__)
@@ -81,13 +82,16 @@ def _save_items(db: Session, source: str, items: list[FoodTrendItem]) -> int:
 
 
 def run_all_crawlers(db: Session) -> list[CrawlResult]:
-    """执行所有爬虫并保存结果。"""
+    """执行所有爬虫并保存结果，最后用 AI 提取未匹配标题中的食物。"""
     results: list[CrawlResult] = []
+    all_unmatched: list[str] = []
+
     for crawler in ALL_CRAWLERS:
         source = crawler.get_source_name()
         try:
             items = crawler.crawl()
             saved = _save_items(db, source, items)
+            all_unmatched.extend(crawler.unmatched_titles)
             db.add(
                 CrawlLog(source=source, status="success", items_count=saved)
             )
@@ -120,7 +124,77 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
                 )
             )
             logger.error("爬虫 %s 失败: %s", source, e, exc_info=True)
+
+    # AI 智能提取：从未匹配标题中发现新食物
+    try:
+        if all_unmatched:
+            ai_items = extract_foods_from_titles(all_unmatched)
+            if ai_items:
+                saved = _save_items(db, "ai_extract", ai_items)
+                _save_ai_discoveries(db, ai_items)
+                db.add(
+                    CrawlLog(source="ai_extract", status="success", items_count=saved)
+                )
+                db.commit()
+                results.append(
+                    CrawlResult(
+                        source="ai_extract",
+                        status="success",
+                        items_count=saved,
+                        message=f"AI提取完成，发现{saved}种新食物",
+                    )
+                )
+                logger.info("AI 提取完成: %d 种新食物", saved)
+            else:
+                results.append(
+                    CrawlResult(
+                        source="ai_extract",
+                        status="success",
+                        items_count=0,
+                        message="AI提取完成，未发现新食物",
+                    )
+                )
+    except Exception as e:
+        db.add(
+            CrawlLog(
+                source="ai_extract",
+                status="failed",
+                items_count=0,
+                error_message=str(e)[:500],
+            )
+        )
+        db.commit()
+        results.append(
+            CrawlResult(
+                source="ai_extract",
+                status="failed",
+                items_count=0,
+                message=f"AI提取失败: {e}",
+            )
+        )
+        logger.error("AI 提取失败: %s", e, exc_info=True)
+
     return results
+
+
+def _save_ai_discoveries(db: Session, items: list[FoodTrendItem]) -> None:
+    """记录 AI 发现的新食物到 ai_discovered_foods 表。"""
+    for item in items:
+        existing = db.execute(
+            select(AIDiscoveredFood).where(
+                AIDiscoveredFood.food_name == item.food_name
+            )
+        ).scalar_one_or_none()
+        if existing:
+            existing.discovery_count += 1
+        else:
+            db.add(
+                AIDiscoveredFood(
+                    food_name=item.food_name,
+                    category=item.category,
+                )
+            )
+    db.commit()
 
 
 def seed_data() -> None:

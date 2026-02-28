@@ -9,7 +9,7 @@ import logging
 import httpx
 
 from app.crawler.base import BaseCrawler, FoodTrendItem
-from app.crawler.food_keywords import FOOD_NAMES, get_category
+from app.crawler.food_keywords import FOOD_NAMES, get_category, match_food_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class BaiduSuggestCrawler(BaseCrawler):
         return "baidu_suggest"
 
     def crawl(self) -> list[FoodTrendItem]:
+        self.unmatched_titles = []
         food_counts: dict[str, int] = {}
 
         for keyword in SEED_KEYWORDS:
@@ -48,6 +49,8 @@ class BaiduSuggestCrawler(BaseCrawler):
                 suggestions = self._get_suggestions(keyword)
                 for text in suggestions:
                     self._extract_foods(text, food_counts)
+                    if not match_food_in_text(text):
+                        self.unmatched_titles.append(text)
             except Exception:
                 logger.warning("百度建议请求失败: %s", keyword, exc_info=True)
 

@@ -45,6 +45,20 @@ class CrawlLog(Base):
     )
 
 
+class AIDiscoveredFood(Base):
+    """AI 发现的新食物记录 — 用于分析和未来词典扩充。"""
+    __tablename__ = "ai_discovered_foods"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    food_name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    discovery_count: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
 class FoodsCategoryCache(Base):
     __tablename__ = "foods_category_cache"
 

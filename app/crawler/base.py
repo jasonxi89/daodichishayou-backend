@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -12,6 +12,9 @@ class FoodTrendItem:
 
 
 class BaseCrawler(ABC):
+    def __init__(self) -> None:
+        self.unmatched_titles: list[str] = []
+
     @abstractmethod
     def get_source_name(self) -> str: ...
 

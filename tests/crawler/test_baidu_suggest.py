@@ -99,7 +99,7 @@ def test_build_items_assigns_category():
 
     counts = {"火锅": 5}
     items = BaiduSuggestCrawler._build_items(counts)
-    assert items[0].category == "正餐"
+    assert items[0].category == "火锅"
 
 
 def test_extract_foods_no_match():

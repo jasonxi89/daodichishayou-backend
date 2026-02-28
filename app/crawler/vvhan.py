@@ -42,6 +42,7 @@ class VvhanCrawler(BaseCrawler):
         return "vvhan"
 
     def crawl(self) -> list[FoodTrendItem]:
+        self.unmatched_titles = []
         all_items: list[FoodTrendItem] = []
         for endpoint, name in PLATFORMS.items():
             try:
@@ -69,6 +70,8 @@ class VvhanCrawler(BaseCrawler):
             title = entry.get("title", "")
             food_name = match_food_in_text(title)
             if not food_name:
+                if title:
+                    self.unmatched_titles.append(title)
                 continue
 
             hot_value = self._parse_hot(entry.get("hot", 0))

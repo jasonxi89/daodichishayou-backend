@@ -39,6 +39,7 @@ class DailyHotCrawler(BaseCrawler):
         return "dailyhot"
 
     def crawl(self) -> list[FoodTrendItem]:
+        self.unmatched_titles = []
         all_items: list[FoodTrendItem] = []
         for platform in PLATFORMS:
             try:
@@ -62,6 +63,8 @@ class DailyHotCrawler(BaseCrawler):
             title = entry.get("title", "")
             food_name = match_food_in_text(title)
             if not food_name:
+                if title:
+                    self.unmatched_titles.append(title)
                 continue
 
             hot_value = entry.get("hot", 0)

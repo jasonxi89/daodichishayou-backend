@@ -4,12 +4,13 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'food_trends.db'}")
 API_PORT = int(os.getenv("API_PORT", "8900"))
 CRAWL_INTERVAL_HOURS = int(os.getenv("CRAWL_INTERVAL_HOURS", "6"))
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+AI_EXTRACT_ENABLED = os.getenv("AI_EXTRACT_ENABLED", "true").lower() == "true"
 
 # 所有 AI 端点共享的核心规则，必须嵌入每个 system prompt
 AI_CORE_RULES = """【核心规则 - 所有回答必须遵守】

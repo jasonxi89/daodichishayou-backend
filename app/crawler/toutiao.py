@@ -29,6 +29,7 @@ class ToutiaoCrawler(BaseCrawler):
         return "toutiao"
 
     def crawl(self) -> list[FoodTrendItem]:
+        self.unmatched_titles = []
         try:
             resp = httpx.get(
                 HOT_BOARD_URL,
@@ -49,6 +50,8 @@ class ToutiaoCrawler(BaseCrawler):
             # 必须匹配到具体食物名才收录，避免"饭店倒闭"之类的误匹配
             food_name = match_food_in_text(title)
             if not food_name:
+                if title:
+                    self.unmatched_titles.append(title)
                 continue
             hot_value = int(entry.get("HotValue", 0))
 

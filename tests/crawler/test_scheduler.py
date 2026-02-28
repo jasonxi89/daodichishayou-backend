@@ -185,3 +185,102 @@ def test_run_all_crawlers_failed_log(db):
     logs = db.execute(select(CrawlLog)).scalars().all()
     assert logs[0].status == "failed"
     assert "something broke" in logs[0].error_message
+
+
+def test_run_all_crawlers_collects_unmatched(db):
+    """Crawlers with unmatched titles trigger AI extraction."""
+    from app.crawler.scheduler import run_all_crawlers
+    from app.crawler.base import BaseCrawler, FoodTrendItem
+
+    class UnmatchedCrawler(BaseCrawler):
+        def get_source_name(self): return "unmatched_test"
+        def crawl(self):
+            self.unmatched_titles = ["酱香拿铁火了", "天气预报"]
+            return [FoodTrendItem("火锅", heat_score=90)]
+
+    ai_items = [FoodTrendItem("酱香拿铁", heat_score=50, category="饮品")]
+    with patch("app.crawler.scheduler.ALL_CRAWLERS", [UnmatchedCrawler()]), \
+         patch("app.crawler.scheduler.extract_foods_from_titles", return_value=ai_items):
+        results = run_all_crawlers(db)
+
+    sources = {r.source for r in results}
+    assert "unmatched_test" in sources
+    assert "ai_extract" in sources
+    ai_result = next(r for r in results if r.source == "ai_extract")
+    assert ai_result.status == "success"
+    assert ai_result.items_count == 1
+
+
+def test_run_all_crawlers_ai_extract_failure_isolated(db):
+    """AI extraction failure should not affect crawler results."""
+    from app.crawler.scheduler import run_all_crawlers
+    from app.crawler.base import BaseCrawler, FoodTrendItem
+
+    class UnmatchedCrawler(BaseCrawler):
+        def get_source_name(self): return "ok_crawler"
+        def crawl(self):
+            self.unmatched_titles = ["something"]
+            return [FoodTrendItem("火锅", heat_score=90)]
+
+    with patch("app.crawler.scheduler.ALL_CRAWLERS", [UnmatchedCrawler()]), \
+         patch("app.crawler.scheduler.extract_foods_from_titles", side_effect=RuntimeError("AI broken")):
+        results = run_all_crawlers(db)
+
+    ok = next(r for r in results if r.source == "ok_crawler")
+    assert ok.status == "success"
+    ai = next(r for r in results if r.source == "ai_extract")
+    assert ai.status == "failed"
+
+
+def test_run_all_crawlers_no_ai_when_no_unmatched(db):
+    """No AI extraction when all titles matched."""
+    from app.crawler.scheduler import run_all_crawlers
+    from app.crawler.base import BaseCrawler, FoodTrendItem
+
+    class MatchedCrawler(BaseCrawler):
+        def get_source_name(self): return "matched"
+        def crawl(self): return [FoodTrendItem("火锅", heat_score=90)]
+
+    with patch("app.crawler.scheduler.ALL_CRAWLERS", [MatchedCrawler()]), \
+         patch("app.crawler.scheduler.extract_foods_from_titles") as mock_ai:
+        results = run_all_crawlers(db)
+
+    mock_ai.assert_not_called()
+    assert all(r.source != "ai_extract" for r in results)
+
+
+def test_save_ai_discoveries(db):
+    """AI discovered foods are saved to ai_discovered_foods table."""
+    from app.crawler.scheduler import _save_ai_discoveries
+    from app.crawler.base import FoodTrendItem
+    from app.models import AIDiscoveredFood
+    from sqlalchemy import select
+
+    items = [
+        FoodTrendItem("酱香拿铁", heat_score=50, category="饮品"),
+        FoodTrendItem("脏脏包", heat_score=50, category="甜品"),
+    ]
+    _save_ai_discoveries(db, items)
+
+    discoveries = db.execute(select(AIDiscoveredFood)).scalars().all()
+    assert len(discoveries) == 2
+    names = {d.food_name for d in discoveries}
+    assert "酱香拿铁" in names
+    assert "脏脏包" in names
+
+
+def test_save_ai_discoveries_increments_count(db):
+    """Repeated discovery increments count."""
+    from app.crawler.scheduler import _save_ai_discoveries
+    from app.crawler.base import FoodTrendItem
+    from app.models import AIDiscoveredFood
+    from sqlalchemy import select
+
+    items = [FoodTrendItem("酱香拿铁", heat_score=50, category="饮品")]
+    _save_ai_discoveries(db, items)
+    _save_ai_discoveries(db, items)
+
+    disc = db.execute(
+        select(AIDiscoveredFood).where(AIDiscoveredFood.food_name == "酱香拿铁")
+    ).scalar_one()
+    assert disc.discovery_count == 2
