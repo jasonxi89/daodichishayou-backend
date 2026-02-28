@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.crawler.base import BaseCrawler, FoodTrendItem
 from app.crawler.baidu_suggest import BaiduSuggestCrawler
+from app.crawler.dailyhot import DailyHotCrawler
 from app.crawler.toutiao import ToutiaoCrawler
+from app.crawler.vvhan import VvhanCrawler
 from app.database import SessionLocal
 from app.models import CrawlLog, FoodTrend
 from app.schemas import CrawlResult
@@ -16,6 +18,8 @@ logger = logging.getLogger(__name__)
 ALL_CRAWLERS: list[BaseCrawler] = [
     ToutiaoCrawler(),
     BaiduSuggestCrawler(),
+    DailyHotCrawler(),
+    VvhanCrawler(),
 ]
 
 # 内置种子数据：热门食物列表（首次启动时导入）

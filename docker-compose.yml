@@ -1,4 +1,10 @@
 services:
+  dailyhot-api:
+    image: imsyy/dailyhot-api:latest
+    ports:
+      - "6688:6688"
+    restart: unless-stopped
+
   api:
     build: .
     ports:
@@ -8,4 +14,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - DAILYHOT_API_URL=http://dailyhot-api:6688
+    depends_on:
+      - dailyhot-api
     restart: unless-stopped
