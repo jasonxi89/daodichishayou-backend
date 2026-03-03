@@ -5,10 +5,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import CRAWL_INTERVAL_HOURS
-from app.crawler.scheduler import scheduled_crawl, seed_data
+from app.config import CRAWL_INTERVAL_HOURS, RECIPE_SCRAPE_INTERVAL_DAYS
+from app.crawler.scheduler import scheduled_crawl, scheduled_recipe_scrape, seed_data
 from app.database import Base, engine
-from app.routers import trending, recommend
+from app.routers import trending, recommend, recipe
 from app.schemas import HealthResponse
 
 logging.basicConfig(
@@ -29,6 +29,13 @@ async def lifespan(app: FastAPI):
         "interval",
         hours=CRAWL_INTERVAL_HOURS,
         id="food_crawl",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        scheduled_recipe_scrape,
+        "interval",
+        days=RECIPE_SCRAPE_INTERVAL_DAYS,
+        id="recipe_scrape",
         replace_existing=True,
     )
     scheduler.start()
@@ -54,6 +61,7 @@ app.add_middleware(
 
 app.include_router(trending.router)
 app.include_router(recommend.router)
+app.include_router(recipe.router)
 
 
 @app.get("/api/health", response_model=HealthResponse)

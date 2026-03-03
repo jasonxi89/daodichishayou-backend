@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -8,10 +9,12 @@ from app.crawler.ai_extractor import extract_foods_from_titles
 from app.crawler.base import BaseCrawler, FoodTrendItem
 from app.crawler.baidu_suggest import BaiduSuggestCrawler
 from app.crawler.dailyhot import DailyHotCrawler
+from app.crawler.recipe_base import RecipeItem
 from app.crawler.toutiao import ToutiaoCrawler
 from app.crawler.vvhan import VvhanCrawler
+from app.crawler.xiachufang import XiachufangScraper
 from app.database import SessionLocal
-from app.models import AIDiscoveredFood, CrawlLog, FoodTrend
+from app.models import AIDiscoveredFood, CrawlLog, FoodTrend, Recipe
 from app.schemas import CrawlResult
 
 logger = logging.getLogger(__name__)
@@ -207,6 +210,116 @@ def seed_data() -> None:
             return
         _save_items(db, "manual", SEED_FOODS)
         logger.info("种子数据导入完成: %d 条", len(SEED_FOODS))
+    finally:
+        db.close()
+
+
+def _save_recipes(db: Session, items: list[RecipeItem]) -> int:
+    """保存菜谱到数据库，按 source_url 去重，返回保存条数。"""
+    count = 0
+    for item in items:
+        existing = db.execute(
+            select(Recipe).where(Recipe.source_url == item.source_url)
+        ).scalar_one_or_none()
+
+        ingredients_json = (
+            json.dumps(item.ingredients, ensure_ascii=False)
+            if item.ingredients
+            else None
+        )
+        steps_json = (
+            json.dumps(item.steps, ensure_ascii=False)
+            if item.steps
+            else None
+        )
+
+        if existing:
+            existing.name = item.name
+            existing.rating = item.rating
+            existing.made_count = item.made_count
+            existing.image_url = item.image_url or existing.image_url
+            existing.author = item.author or existing.author
+            existing.ingredients_json = ingredients_json or existing.ingredients_json
+            existing.ingredients_text = item.ingredients_text or existing.ingredients_text
+            existing.steps_json = steps_json or existing.steps_json
+            existing.category = item.category or existing.category
+            existing.list_source = item.list_source or existing.list_source
+            existing.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(
+                Recipe(
+                    name=item.name,
+                    source_url=item.source_url,
+                    rating=item.rating,
+                    made_count=item.made_count,
+                    image_url=item.image_url,
+                    author=item.author,
+                    ingredients_json=ingredients_json,
+                    ingredients_text=item.ingredients_text,
+                    steps_json=steps_json,
+                    category=item.category,
+                    list_source=item.list_source,
+                )
+            )
+        count += 1
+    db.commit()
+    return count
+
+
+def run_recipe_scrapers(db: Session) -> list[CrawlResult]:
+    """执行菜谱爬虫并保存结果。"""
+    results: list[CrawlResult] = []
+
+    # Collect existing URLs to skip
+    existing_urls = {
+        row[0]
+        for row in db.execute(select(Recipe.source_url)).all()
+    }
+
+    scraper = XiachufangScraper()
+    source = scraper.get_source_name()
+    try:
+        items = scraper.scrape(existing_urls=existing_urls)
+        saved = _save_recipes(db, items)
+        db.add(CrawlLog(source=source, status="success", items_count=saved))
+        db.commit()
+        results.append(
+            CrawlResult(
+                source=source,
+                status="success",
+                items_count=saved,
+                message=f"菜谱爬取完成，保存{saved}条",
+            )
+        )
+        logger.info("菜谱爬虫 %s 完成: %d 条", source, saved)
+    except Exception as e:
+        db.add(
+            CrawlLog(
+                source=source,
+                status="failed",
+                items_count=0,
+                error_message=str(e)[:500],
+            )
+        )
+        db.commit()
+        results.append(
+            CrawlResult(
+                source=source,
+                status="failed",
+                items_count=0,
+                message=f"菜谱爬取失败: {e}",
+            )
+        )
+        logger.error("菜谱爬虫 %s 失败: %s", source, e, exc_info=True)
+
+    return results
+
+
+def scheduled_recipe_scrape() -> None:
+    """菜谱定时爬取入口。"""
+    db = SessionLocal()
+    try:
+        run_recipe_scrapers(db)
     finally:
         db.close()
 

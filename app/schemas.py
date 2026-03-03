@@ -82,3 +82,24 @@ class BulkGenerateFoodsRequest(BaseModel):
 
 class BulkGenerateFoodsResponse(BaseModel):
     results: dict[str, list[str]]
+
+
+class RecipeOut(BaseModel):
+    id: int
+    name: str
+    rating: float | None = None
+    made_count: int = 0
+    image_url: str | None = None
+    author: str | None = None
+    ingredients_json: str | None = None
+    ingredients_text: str | None = None
+    steps_json: str | None = None
+    category: str | None = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecipeSearchResponse(BaseModel):
+    total: int
+    items: list[RecipeOut]
