@@ -188,7 +188,7 @@ async def recommend_by_ingredients(
     try:
         system_prompt = SYSTEM_PROMPT_EXTRA if req.allow_extra else SYSTEM_PROMPT
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=4096,
             system=system_prompt,
             messages=[
@@ -280,7 +280,7 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
 
     try:
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=4096,
             system=CATEGORY_FOODS_PROMPT,
             messages=[
@@ -388,7 +388,7 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
     categories_text = "、".join(f"「{c}」" for c in uncached_categories)
     try:
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=8192,
             system=BULK_CATEGORY_FOODS_PROMPT,
             messages=[
