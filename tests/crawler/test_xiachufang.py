@@ -249,3 +249,69 @@ def test_scraper_get_source_name():
     from app.crawler.xiachufang import XiachufangScraper
 
     assert XiachufangScraper().get_source_name() == "xiachufang"
+
+
+def test_parse_detail_page_no_structured_data():
+    """Detail page with no JSON-LD and no ings/steps divs."""
+    from app.crawler.xiachufang import _parse_detail_page
+    from app.crawler.recipe_base import RecipeItem
+
+    item = RecipeItem(name="空页面", source_url="https://example.com/r/5")
+    result = _parse_detail_page("<html><body>nothing</body></html>", item)
+    assert result.ingredients is None
+    assert result.steps is None
+
+
+def test_parse_detail_page_invalid_json_ld():
+    """JSON-LD with invalid JSON should fall back to HTML parsing."""
+    from app.crawler.xiachufang import _parse_detail_page
+    from app.crawler.recipe_base import RecipeItem
+
+    html = """<html><head>
+    <script type="application/ld+json">{invalid json!!}</script>
+    </head><body></body></html>"""
+    item = RecipeItem(name="坏数据", source_url="https://example.com/r/6")
+    result = _parse_detail_page(html, item)
+    assert result.name == "坏数据"
+
+
+def test_extract_ingredients_from_list_page():
+    from app.crawler.xiachufang import _extract_ingredients_from_list_page
+    from bs4 import BeautifulSoup
+
+    html = '<p class="ing"><a>番茄</a>、<a>鸡蛋</a>、<span>盐</span></p>'
+    soup = BeautifulSoup(html, "html.parser")
+    tag = soup.find("p")
+    ingredients, text = _extract_ingredients_from_list_page(tag)
+    assert len(ingredients) == 3
+    assert "番茄" in text
+    assert "盐" in text
+
+
+def test_scraper_detail_captcha_stops_enrichment():
+    """CAPTCHA on detail page stops enrichment but keeps list data."""
+    from app.crawler.xiachufang import XiachufangScraper
+
+    scraper = XiachufangScraper()
+
+    list_resp = MagicMock()
+    list_resp.text = SAMPLE_LIST_HTML
+    list_resp.raise_for_status = MagicMock()
+
+    captcha_resp = MagicMock()
+    captcha_resp.text = CAPTCHA_HTML
+    captcha_resp.raise_for_status = MagicMock()
+
+    call_count = [0]
+    def side_effect(url):
+        call_count[0] += 1
+        if "/explore/" in url:
+            return list_resp
+        return captcha_resp
+
+    with patch.object(scraper._client, "get", side_effect=side_effect), \
+         patch("app.crawler.xiachufang.time.sleep"):
+        items = scraper.scrape()
+
+    # Items from list pages are still returned
+    assert len(items) > 0

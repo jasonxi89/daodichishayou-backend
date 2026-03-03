@@ -269,6 +269,154 @@ def test_save_ai_discoveries(db):
     assert "脏脏包" in names
 
 
+def test_save_recipes_inserts_new(db):
+    from app.crawler.scheduler import _save_recipes
+    from app.crawler.recipe_base import RecipeItem
+    from app.models import Recipe
+    from sqlalchemy import select
+
+    items = [
+        RecipeItem(
+            name="番茄炒蛋",
+            source_url="https://example.com/r/1",
+            rating=8.9,
+            made_count=1000,
+            ingredients=[{"name": "番茄"}, {"name": "鸡蛋"}],
+            ingredients_text="番茄 鸡蛋",
+            steps=[{"text": "切番茄"}, {"text": "炒蛋"}],
+            category="honor",
+            list_source="xiachufang",
+        ),
+    ]
+    count = _save_recipes(db, items)
+    assert count == 1
+
+    saved = db.execute(select(Recipe)).scalars().all()
+    assert len(saved) == 1
+    assert saved[0].name == "番茄炒蛋"
+    assert saved[0].ingredients_text == "番茄 鸡蛋"
+
+
+def test_save_recipes_updates_existing(db):
+    from app.crawler.scheduler import _save_recipes
+    from app.crawler.recipe_base import RecipeItem
+    from app.models import Recipe
+    from sqlalchemy import select
+
+    item1 = RecipeItem(
+        name="番茄炒蛋",
+        source_url="https://example.com/r/1",
+        rating=8.0,
+        made_count=500,
+    )
+    _save_recipes(db, [item1])
+
+    item2 = RecipeItem(
+        name="番茄炒蛋(升级版)",
+        source_url="https://example.com/r/1",
+        rating=9.0,
+        made_count=2000,
+        author="新厨师",
+    )
+    _save_recipes(db, [item2])
+
+    recipe = db.execute(select(Recipe)).scalar_one()
+    assert recipe.name == "番茄炒蛋(升级版)"
+    assert recipe.rating == 9.0
+    assert recipe.author == "新厨师"
+
+
+def test_save_recipes_preserves_null_fields(db):
+    from app.crawler.scheduler import _save_recipes
+    from app.crawler.recipe_base import RecipeItem
+    from app.models import Recipe
+    from sqlalchemy import select
+
+    _save_recipes(db, [RecipeItem(
+        name="菜",
+        source_url="https://example.com/r/1",
+        author="老厨师",
+        category="honor",
+    )])
+    # Update without author/category
+    _save_recipes(db, [RecipeItem(
+        name="菜更新",
+        source_url="https://example.com/r/1",
+    )])
+
+    recipe = db.execute(select(Recipe)).scalar_one()
+    assert recipe.author == "老厨师"  # preserved
+    assert recipe.category == "honor"  # preserved
+
+
+def test_save_recipes_empty_list(db):
+    from app.crawler.scheduler import _save_recipes
+    count = _save_recipes(db, [])
+    assert count == 0
+
+
+def test_run_recipe_scrapers_success(db):
+    from app.crawler.scheduler import run_recipe_scrapers
+    from app.crawler.recipe_base import RecipeItem
+
+    mock_items = [RecipeItem(name="测试菜", source_url="https://example.com/r/1", rating=9.0)]
+
+    with patch("app.crawler.scheduler.XiachufangScraper") as MockScraper:
+        instance = MockScraper.return_value
+        instance.get_source_name.return_value = "xiachufang"
+        instance.scrape.return_value = mock_items
+        results = run_recipe_scrapers(db)
+
+    assert len(results) == 1
+    assert results[0].status == "success"
+    assert results[0].items_count == 1
+
+
+def test_run_recipe_scrapers_failure(db):
+    from app.crawler.scheduler import run_recipe_scrapers
+
+    with patch("app.crawler.scheduler.XiachufangScraper") as MockScraper:
+        instance = MockScraper.return_value
+        instance.get_source_name.return_value = "xiachufang"
+        instance.scrape.side_effect = RuntimeError("Network down")
+        results = run_recipe_scrapers(db)
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert "Network down" in results[0].message
+
+
+def test_run_recipe_scrapers_passes_existing_urls(db):
+    from app.crawler.scheduler import run_recipe_scrapers
+    from app.models import Recipe
+
+    # Pre-populate a recipe
+    db.add(Recipe(name="已有菜", source_url="https://example.com/existing"))
+    db.commit()
+
+    with patch("app.crawler.scheduler.XiachufangScraper") as MockScraper:
+        instance = MockScraper.return_value
+        instance.get_source_name.return_value = "xiachufang"
+        instance.scrape.return_value = []
+        run_recipe_scrapers(db)
+        call_kwargs = instance.scrape.call_args
+        existing_urls = call_kwargs.kwargs.get("existing_urls") or call_kwargs[1].get("existing_urls")
+        assert "https://example.com/existing" in existing_urls
+
+
+def test_scheduled_recipe_scrape_uses_session():
+    from app.crawler.scheduler import scheduled_recipe_scrape
+
+    with patch("app.crawler.scheduler.SessionLocal") as mock_cls:
+        mock_db = MagicMock()
+        mock_cls.return_value = mock_db
+        with patch("app.crawler.scheduler.run_recipe_scrapers") as mock_run:
+            mock_run.return_value = []
+            scheduled_recipe_scrape()
+            mock_run.assert_called_once_with(mock_db)
+            mock_db.close.assert_called_once()
+
+
 def test_save_ai_discoveries_increments_count(db):
     """Repeated discovery increments count."""
     from app.crawler.scheduler import _save_ai_discoveries
