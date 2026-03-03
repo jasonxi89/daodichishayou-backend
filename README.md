@@ -1,6 +1,102 @@
-# 到底吃啥哟 - 美食热度API后端
+# "What to Eat" — Food Trending API Backend
+
+Backend service that powers the WeChat mini program "到底吃啥哟" (What to Eat), providing real-time food trending rankings and AI-powered recipe recommendations.
+
+## Features
+
+- **Trending Rankings API** — aggregates popular food data from multiple sources
+- **AI Content Extraction** — uses Claude API to extract food keywords from unstructured web content (150+ food dictionary)
+- **Auto Crawling** — scheduled crawler runs every 6 hours via APScheduler
+- **Recipe Scraping** — collects recipes with configurable intervals
+
+## Tech Stack
+
+- **FastAPI** — async web framework
+- **SQLAlchemy** — ORM
+- **SQLite** — database
+- **APScheduler** — scheduled crawling
+- **httpx** — async HTTP client
+- **Claude API** — AI-powered content extraction
+- **Docker** — containerized deployment
+- **GitHub Actions** — CI/CD
+
+## Quick Start
+
+### Local
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --port 8900
+```
+
+Visit http://localhost:8900/docs for API documentation.
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+## API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/trending` | Trending rankings (supports limit/offset/source/category filters) |
+| GET | `/api/trending/categories` | Category list |
+| GET | `/api/trending/sources` | Data source list |
+| POST | `/api/trending/crawl` | Manually trigger crawler |
+| POST | `/api/trending/import` | Manually import data |
+| GET | `/api/health` | Health check |
+
+## Data Sources
+
+| Source | Description |
+|--------|-------------|
+| manual | Built-in seed data (20 popular foods) |
+| toutiao | Toutiao (Today's Headlines) hot search — filters food-related topics in real-time |
+| baidu_suggest | Baidu search suggestions — discovers trending foods via autocomplete |
+
+Crawler runs automatically every 6 hours. Seed data is imported on first startup.
+
+## Project Structure
+
+```
+app/
+├── main.py              # FastAPI entry point
+├── config.py            # Configuration
+├── database.py          # Database connection
+├── models.py            # ORM models
+├── schemas.py           # Request/response schemas
+├── routers/
+│   └── trending.py      # API routes
+└── crawler/
+    ├── base.py          # Crawler base class
+    ├── food_keywords.py # Food keyword dictionary (150+ foods)
+    ├── toutiao.py       # Toutiao hot search crawler
+    ├── baidu_suggest.py # Baidu suggestions crawler
+    └── scheduler.py     # Scheduled task manager
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `sqlite:///data/food_trends.db` | Database connection |
+| `API_PORT` | `8900` | Server port |
+| `CRAWL_INTERVAL_HOURS` | `6` | Crawler interval (hours) |
+
+---
+
+# 到底吃啥哟 — 美食热度API后端
 
 为微信小程序「到底吃啥哟」提供美食热度排行数据的后端服务。
+
+## 功能
+
+- **热度排行 API** — 从多个数据源聚合热门美食数据
+- **AI 内容提取** — 使用 Claude API 从非结构化网页内容中提取美食关键词（150+ 食物词典）
+- **自动爬虫** — APScheduler 定时每6小时执行一次
+- **菜谱抓取** — 可配置间隔的菜谱收集
 
 ## 技术栈
 
@@ -9,7 +105,9 @@
 - **SQLite** - 数据库
 - **APScheduler** - 定时爬虫调度
 - **httpx** - HTTP客户端
+- **Claude API** - AI内容提取
 - **Docker** - 容器化部署
+- **GitHub Actions** - CI/CD
 
 ## 快速开始
 
@@ -38,19 +136,6 @@ docker compose up --build
 | POST | `/api/trending/crawl` | 手动触发爬虫 |
 | POST | `/api/trending/import` | 手动导入数据 |
 | GET | `/api/health` | 健康检查 |
-
-### 示例
-
-```bash
-# 获取热度Top10
-curl http://localhost:8900/api/trending?limit=10
-
-# 按分类筛选
-curl http://localhost:8900/api/trending?category=小吃
-
-# 手动触发爬虫
-curl -X POST http://localhost:8900/api/trending/crawl
-```
 
 ## 数据来源
 
