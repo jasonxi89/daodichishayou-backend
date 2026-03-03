@@ -231,6 +231,120 @@ def test_recommend_extra_ingredients_parsed(client, monkeypatch):
         assert dish["extra_ingredients"] == ["牛腩"]
 
 
+def _insert_recipe(db, name, ingredients_text, ingredients_json, steps_json, rating=8.5, made_count=100):
+    """Helper to insert a Recipe row for local-search tests."""
+    from app.models import Recipe
+    db.add(Recipe(
+        name=name,
+        source_url=f"https://example.com/{name}",
+        rating=rating,
+        made_count=made_count,
+        ingredients_text=ingredients_text,
+        ingredients_json=ingredients_json,
+        steps_json=steps_json,
+    ))
+    db.commit()
+
+
+def test_recommend_local_hit(client, db, monkeypatch):
+    """Local recipes satisfy count → Claude API not called."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
+                   json.dumps([{"name": "番茄", "amount": "2个"}, {"name": "鸡蛋", "amount": "3个"}]),
+                   json.dumps([{"text": "切块"}, {"text": "炒熟"}]))
+    _insert_recipe(db, "番茄蛋汤", "番茄 鸡蛋",
+                   json.dumps([{"name": "番茄", "amount": "1个"}, {"name": "鸡蛋", "amount": "2个"}]),
+                   json.dumps([{"text": "煮汤"}]))
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+
+        resp = client.post("/api/recommend", json={"ingredients": ["番茄", "鸡蛋"], "count": 2})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["dishes"]) == 2
+        mock_client.messages.create.assert_not_called()
+
+
+def test_recommend_local_partial(client, db, monkeypatch):
+    """Local has 1 recipe, need 2 → Claude called for remaining 1."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
+                   json.dumps([{"name": "番茄", "amount": "2个"}]),
+                   json.dumps([{"text": "炒熟"}]))
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post("/api/recommend", json={"ingredients": ["番茄", "鸡蛋"], "count": 2})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["dishes"]) == 2
+        # First dish from local, second from Claude
+        assert data["dishes"][0]["name"] == "番茄炒蛋"
+        mock_client.messages.create.assert_called_once()
+        # AI asked for 1 dish, excluding the local one
+        call_args = mock_client.messages.create.call_args
+        user_content = call_args[1]["messages"][0]["content"]
+        assert "1道" in user_content
+        assert "番茄炒蛋" in user_content
+
+
+def test_recommend_local_empty(client, db, monkeypatch):
+    """No local recipes → falls through to Claude."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
+        assert resp.status_code == 200
+        mock_client.messages.create.assert_called_once()
+
+
+def test_recommend_local_skip_when_allow_extra(client, db, monkeypatch):
+    """allow_extra=True → skip local search, go straight to Claude."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
+                   json.dumps([{"name": "番茄", "amount": "2个"}]),
+                   json.dumps([{"text": "炒熟"}]))
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post("/api/recommend", json={
+            "ingredients": ["番茄"], "allow_extra": True, "count": 1,
+        })
+        assert resp.status_code == 200
+        mock_client.messages.create.assert_called_once()
+
+
+def test_recommend_local_skip_when_preferences(client, db, monkeypatch):
+    """preferences set → skip local search, go straight to Claude."""
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
+                   json.dumps([{"name": "番茄", "amount": "2个"}]),
+                   json.dumps([{"text": "炒熟"}]))
+
+    with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        mock_client.messages.create.return_value = make_claude_response(VALID_DISHES_JSON)
+
+        resp = client.post("/api/recommend", json={
+            "ingredients": ["番茄"], "preferences": "清淡", "count": 1,
+        })
+        assert resp.status_code == 200
+        mock_client.messages.create.assert_called_once()
+
+
 def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
     monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:

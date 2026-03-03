@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import AI_CORE_RULES, CLAUDE_API_KEY
 from app.database import get_db
-from app.models import FoodsCategoryCache
+from app.models import FoodsCategoryCache, Recipe
 from app.schemas import (
     BulkGenerateFoodsRequest,
     BulkGenerateFoodsResponse,
@@ -95,8 +96,66 @@ def build_user_prompt(
     return "\n".join(parts)
 
 
+def _recipe_to_dish(recipe: Recipe) -> RecommendedDish:
+    """Convert a local Recipe row to a RecommendedDish."""
+    ingredients_data = json.loads(recipe.ingredients_json)
+    steps_data = json.loads(recipe.steps_json)
+    return RecommendedDish(
+        name=recipe.name,
+        summary="经典家常做法",
+        ingredients=[
+            f"{i['name']} {i.get('amount', '适量')}" for i in ingredients_data
+        ],
+        steps=[
+            s["text"] if isinstance(s, dict) else str(s) for s in steps_data
+        ],
+    )
+
+
+def _search_local_recipes(
+    db: Session,
+    ingredients: list[str],
+    count: int,
+    exclude_dishes: list[str] | None = None,
+) -> list[RecommendedDish]:
+    """Search local recipes table by ingredient matching."""
+    match_cases = [
+        func.iif(Recipe.ingredients_text.like(f"%{ing}%"), 1, 0)
+        for ing in ingredients
+    ]
+    match_count = sum(match_cases)
+
+    conditions = [
+        Recipe.ingredients_text.like(f"%{ing}%") for ing in ingredients
+    ]
+
+    stmt = (
+        select(Recipe, match_count.label("match_count"))
+        .where(
+            or_(*conditions),
+            Recipe.ingredients_text.isnot(None),
+            Recipe.steps_json.isnot(None),
+        )
+    )
+
+    if exclude_dishes:
+        stmt = stmt.where(Recipe.name.notin_(exclude_dishes))
+
+    stmt = stmt.order_by(
+        match_count.desc(),
+        func.coalesce(Recipe.rating, 0).desc(),
+        Recipe.made_count.desc(),
+    ).limit(count)
+
+    rows = db.execute(stmt).all()
+    return [_recipe_to_dish(row[0]) for row in rows]
+
+
 @router.post("/recommend", response_model=IngredientRecommendResponse)
-async def recommend_by_ingredients(req: IngredientRecommendRequest):
+async def recommend_by_ingredients(
+    req: IngredientRecommendRequest,
+    db: Session = Depends(get_db),
+):
     if not CLAUDE_API_KEY:
         raise HTTPException(status_code=500, detail="CLAUDE_API_KEY not configured")
 
@@ -104,6 +163,25 @@ async def recommend_by_ingredients(req: IngredientRecommendRequest):
         raise HTTPException(status_code=400, detail="At least one ingredient is required")
 
     count = max(1, min(req.count, 5))
+
+    # Local-first: skip when allow_extra or preferences are set
+    is_local_eligible = not req.allow_extra and not req.preferences
+    local_dishes: list[RecommendedDish] = []
+
+    if is_local_eligible:
+        local_dishes = _search_local_recipes(
+            db, req.ingredients, count, req.exclude_dishes or None,
+        )
+        if len(local_dishes) >= count:
+            return IngredientRecommendResponse(
+                dishes=local_dishes[:count],
+                input_ingredients=req.ingredients,
+            )
+
+    # Need AI for all or remaining dishes
+    ai_count = count - len(local_dishes)
+    ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
+    ai_exclude.extend(d.name for d in local_dishes)
 
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
@@ -117,8 +195,8 @@ async def recommend_by_ingredients(req: IngredientRecommendRequest):
                 {
                     "role": "user",
                     "content": build_user_prompt(
-                        req.ingredients, count, req.preferences,
-                        req.allow_extra, req.exclude_dishes,
+                        req.ingredients, ai_count, req.preferences,
+                        req.allow_extra, ai_exclude or None,
                     ),
                 }
             ],
@@ -143,9 +221,9 @@ async def recommend_by_ingredients(req: IngredientRecommendRequest):
         logger.error("Failed to parse Claude response: %s", raw_text[:500])
         raise HTTPException(status_code=502, detail="AI response format error")
 
-    dishes = []
+    ai_dishes = []
     for item in data.get("dishes", []):
-        dishes.append(
+        ai_dishes.append(
             RecommendedDish(
                 name=item.get("name", ""),
                 summary=item.get("summary", ""),
@@ -158,7 +236,7 @@ async def recommend_by_ingredients(req: IngredientRecommendRequest):
         )
 
     return IngredientRecommendResponse(
-        dishes=dishes,
+        dishes=local_dishes + ai_dishes,
         input_ingredients=req.ingredients,
     )
 
