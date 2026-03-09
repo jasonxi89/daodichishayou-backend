@@ -11,7 +11,6 @@ from app.crawler.baidu_suggest import BaiduSuggestCrawler
 from app.crawler.dailyhot import DailyHotCrawler
 from app.crawler.recipe_base import RecipeItem
 from app.crawler.toutiao import ToutiaoCrawler
-from app.crawler.vvhan import VvhanCrawler
 from app.crawler.xiachufang import XiachufangScraper
 from app.database import SessionLocal
 from app.models import AIDiscoveredFood, CrawlLog, FoodTrend, Recipe
@@ -23,7 +22,6 @@ ALL_CRAWLERS: list[BaseCrawler] = [
     ToutiaoCrawler(),
     BaiduSuggestCrawler(),
     DailyHotCrawler(),
-    VvhanCrawler(),
 ]
 
 # 内置种子数据：热门食物列表（首次启动时导入）

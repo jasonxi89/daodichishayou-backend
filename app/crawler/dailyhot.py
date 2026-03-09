@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 DAILYHOT_API_URL = os.getenv("DAILYHOT_API_URL", "http://localhost:6688")
 
 # 要拉取的平台列表
-PLATFORMS = ["weibo", "douyin", "bilibili", "baidu"]
+PLATFORMS = ["weibo", "douyin", "bilibili", "baidu", "zhihu", "thepaper"]
 
 HEADERS = {
     "User-Agent": (
