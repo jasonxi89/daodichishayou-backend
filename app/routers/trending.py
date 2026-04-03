@@ -1,15 +1,19 @@
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import FoodTrend
+from app.models import FoodDigest, FoodTrend, FoodTrendSnapshot
 from app.schemas import (
     CrawlResult,
+    FoodDigestOut,
     FoodTrendImport,
     FoodTrendOut,
+    FoodTrendSnapshotOut,
+    TrendHistoryResponse,
     TrendingResponse,
 )
 
@@ -104,3 +108,49 @@ def import_data(
     for r in created:
         db.refresh(r)
     return created
+
+
+@router.get("/digest", response_model=FoodDigestOut | None)
+def get_digest(
+    target_date: date | None = Query(None, alias="date"),
+    db: Session = Depends(get_db),
+):
+    """获取指定日期的美食趋势快报，默认今日。"""
+    target = target_date or date.today()
+    digest = db.execute(
+        select(FoodDigest).where(FoodDigest.digest_date == target)
+    ).scalar_one_or_none()
+
+    if not digest:
+        return None
+
+    # 反序列化 top_foods 供 response_model 使用
+    digest._top_foods_list = json.loads(digest.top_foods)
+    return FoodDigestOut(
+        id=digest.id,
+        digest_date=digest.digest_date,
+        summary=digest.summary,
+        top_foods=json.loads(digest.top_foods),
+        recommendation=digest.recommendation,
+        updated_at=digest.updated_at,
+    )
+
+
+@router.get("/history/{food_name}", response_model=TrendHistoryResponse)
+def get_food_history(
+    food_name: str,
+    days: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db),
+):
+    """查询某食物最近 N 天的热度历史。"""
+    snapshots = (
+        db.execute(
+            select(FoodTrendSnapshot)
+            .where(FoodTrendSnapshot.food_name == food_name)
+            .order_by(FoodTrendSnapshot.snapshot_date.desc())
+            .limit(days)
+        )
+        .scalars()
+        .all()
+    )
+    return TrendHistoryResponse(food_name=food_name, history=snapshots)

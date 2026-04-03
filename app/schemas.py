@@ -84,6 +84,32 @@ class BulkGenerateFoodsResponse(BaseModel):
     results: dict[str, list[str]]
 
 
+class FoodDigestOut(BaseModel):
+    id: int
+    digest_date: datetime
+    summary: str
+    top_foods: list[str]
+    recommendation: str | None = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FoodTrendSnapshotOut(BaseModel):
+    food_name: str
+    heat_score: int
+    source: str
+    category: str | None = None
+    snapshot_date: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TrendHistoryResponse(BaseModel):
+    food_name: str
+    history: list[FoodTrendSnapshotOut]
+
+
 class RecipeOut(BaseModel):
     id: int
     name: str

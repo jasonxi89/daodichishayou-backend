@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from app.crawler.recipe_base import RecipeItem
 from app.crawler.toutiao import ToutiaoCrawler
 from app.crawler.xiachufang import XiachufangScraper
 from app.database import SessionLocal
-from app.models import AIDiscoveredFood, CrawlLog, FoodTrend, Recipe
+from app.models import AIDiscoveredFood, CrawlLog, FoodTrend, FoodTrendSnapshot, Recipe
 from app.schemas import CrawlResult
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,47 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
         )
         logger.error("AI 提取失败: %s", e, exc_info=True)
 
+    # 保存今日热度快照
+    _save_daily_snapshot(db)
+
+    # 生成 AI 趋势快报
+    try:
+        from app.crawler.ai_digest import generate_daily_digest
+        generate_daily_digest(db)
+    except Exception:
+        logger.error("AI 趋势快报生成失败", exc_info=True)
+
     return results
+
+
+def _save_daily_snapshot(db: Session) -> None:
+    """保存当前热度数据为今日快照（同一天同食物同来源只保留最新）。"""
+    today = date.today()
+    all_trends = db.execute(select(FoodTrend)).scalars().all()
+
+    for trend in all_trends:
+        existing = db.execute(
+            select(FoodTrendSnapshot).where(
+                FoodTrendSnapshot.snapshot_date == today,
+                FoodTrendSnapshot.food_name == trend.food_name,
+                FoodTrendSnapshot.source == trend.source,
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            existing.heat_score = trend.heat_score
+            existing.category = trend.category
+        else:
+            db.add(FoodTrendSnapshot(
+                snapshot_date=today,
+                food_name=trend.food_name,
+                heat_score=trend.heat_score,
+                source=trend.source,
+                category=trend.category,
+            ))
+
+    db.commit()
+    logger.info("今日热度快照已保存: %s, %d 条", today, len(all_trends))
 
 
 def _save_ai_discoveries(db: Session, items: list[FoodTrendItem]) -> None:

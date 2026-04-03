@@ -82,6 +82,55 @@ class Recipe(Base):
     )
 
 
+class FoodDigest(Base):
+    """每日美食趋势快报。"""
+    __tablename__ = "food_digests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    digest_date: Mapped[datetime] = mapped_column(DateTime, unique=True, index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    top_foods: Mapped[str] = mapped_column(Text)  # JSON array
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+class FoodTrendSnapshot(Base):
+    """每日热度快照 — 记录历史趋势变化。"""
+    __tablename__ = "food_trend_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_date: Mapped[datetime] = mapped_column(DateTime, index=True)
+    food_name: Mapped[str] = mapped_column(String(100), index=True)
+    heat_score: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(50))
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_snapshot_date_food", "snapshot_date", "food_name", "source", unique=True),
+    )
+
+
+class AITitleCache(Base):
+    """AI 标题提取缓存 — 避免重复调用 LLM。"""
+    __tablename__ = "ai_title_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    extracted_foods: Mapped[str] = mapped_column(Text)  # JSON array
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
 class FoodsCategoryCache(Base):
     __tablename__ = "foods_category_cache"
 

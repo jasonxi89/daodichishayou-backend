@@ -1,15 +1,21 @@
-"""AI 智能食物提取 — 用 Claude 从未匹配标题中发现新食物。"""
+"""AI 智能食物提取 — 用 Claude 从未匹配标题中发现新食物（带哈希缓存）。"""
 
+import hashlib
 import json
 import logging
+
 from anthropic import Anthropic
-from app.config import AI_CORE_RULES, CLAUDE_API_KEY, AI_EXTRACT_ENABLED
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.config import AI_CORE_RULES, CLAUDE_API_KEY, CLAUDE_MODEL, AI_EXTRACT_ENABLED
 from app.crawler.base import FoodTrendItem
-from app.crawler.food_keywords import FOOD_NAMES, get_category
+from app.crawler.food_keywords import FOOD_NAMES
+from app.database import SessionLocal
+from app.models import AITitleCache
 
 logger = logging.getLogger(__name__)
 
-# 15 categories matching food_keywords.py
 VALID_CATEGORIES = {
     "正餐", "小吃", "面食", "烧烤", "火锅", "西餐",
     "日料", "韩餐", "东南亚", "甜品", "饮品", "早餐",
@@ -31,15 +37,54 @@ _MAX_TITLES_PER_BATCH = 50
 _DEFAULT_HEAT_SCORE = 50
 
 
+def _hash_title(title: str) -> str:
+    return hashlib.sha256(title.strip().encode()).hexdigest()
+
+
+def _load_cached(db: Session, titles: list[str]) -> tuple[list[FoodTrendItem], list[str]]:
+    """从缓存加载已处理标题的结果，返回 (缓存命中的items, 需要调 AI 的titles)。"""
+    cached_items: list[FoodTrendItem] = []
+    uncached_titles: list[str] = []
+
+    for title in titles:
+        h = _hash_title(title)
+        row = db.execute(
+            select(AITitleCache).where(AITitleCache.title_hash == h)
+        ).scalar_one_or_none()
+
+        if row:
+            foods = json.loads(row.extracted_foods)
+            for food in foods:
+                name = food.get("name", "")
+                if name and name not in FOOD_NAMES:
+                    cached_items.append(FoodTrendItem(
+                        food_name=name,
+                        heat_score=_DEFAULT_HEAT_SCORE,
+                        post_count=0,
+                        category=food.get("category", "小吃"),
+                    ))
+        else:
+            uncached_titles.append(title)
+
+    return cached_items, uncached_titles
+
+
+def _save_cache(db: Session, title: str, foods: list[dict]) -> None:
+    """缓存单条标题的提取结果。"""
+    h = _hash_title(title)
+    existing = db.execute(
+        select(AITitleCache).where(AITitleCache.title_hash == h)
+    ).scalar_one_or_none()
+    if not existing:
+        db.add(AITitleCache(
+            title_hash=h,
+            title=title[:500],
+            extracted_foods=json.dumps(foods, ensure_ascii=False),
+        ))
+
+
 def extract_foods_from_titles(titles: list[str]) -> list[FoodTrendItem]:
-    """从未匹配的热搜标题中用 AI 提取食物名。
-
-    Args:
-        titles: 未匹配到词典食物的热搜标题列表
-
-    Returns:
-        提取到的食物趋势列表，source 标记为 ai_extract
-    """
+    """从未匹配的热搜标题中用 AI 提取食物名（带哈希缓存）。"""
     if not AI_EXTRACT_ENABLED:
         logger.info("AI 提取已禁用")
         return []
@@ -51,32 +96,55 @@ def extract_foods_from_titles(titles: list[str]) -> list[FoodTrendItem]:
     if not titles:
         return []
 
-    # 去重
     unique_titles = list(dict.fromkeys(titles))
 
-    all_items: list[FoodTrendItem] = []
-    # 分批处理
-    for i in range(0, len(unique_titles), _MAX_TITLES_PER_BATCH):
-        batch = unique_titles[i:i + _MAX_TITLES_PER_BATCH]
-        try:
-            items = _extract_batch(batch)
-            all_items.extend(items)
-        except Exception:
-            logger.error("AI 提取批次 %d 失败", i // _MAX_TITLES_PER_BATCH, exc_info=True)
+    db = SessionLocal()
+    try:
+        cached_items, uncached_titles = _load_cached(db, unique_titles)
+        logger.info(
+            "标题缓存: %d 命中, %d 需调用 AI",
+            len(unique_titles) - len(uncached_titles),
+            len(uncached_titles),
+        )
 
-    # 去重（同名食物只保留一个）
-    seen: dict[str, FoodTrendItem] = {}
-    for item in all_items:
-        if item.food_name not in seen:
-            seen[item.food_name] = item
+        ai_items: list[FoodTrendItem] = []
+        if uncached_titles:
+            for i in range(0, len(uncached_titles), _MAX_TITLES_PER_BATCH):
+                batch = uncached_titles[i:i + _MAX_TITLES_PER_BATCH]
+                try:
+                    batch_items, batch_mapping = _extract_batch(batch)
+                    ai_items.extend(batch_items)
+                    # 缓存每条标题的结果
+                    for title in batch:
+                        foods = batch_mapping.get(title, [])
+                        _save_cache(db, title, foods)
+                    db.commit()
+                except Exception:
+                    logger.error(
+                        "AI 提取批次 %d 失败",
+                        i // _MAX_TITLES_PER_BATCH,
+                        exc_info=True,
+                    )
 
-    result = list(seen.values())
-    logger.info("AI 提取: 发现 %d 种新食物", len(result))
-    return result
+        all_items = cached_items + ai_items
+        # 去重
+        seen: dict[str, FoodTrendItem] = {}
+        for item in all_items:
+            if item.food_name not in seen:
+                seen[item.food_name] = item
+
+        result = list(seen.values())
+        logger.info("AI 提取: 发现 %d 种新食物 (缓存 %d + AI %d)",
+                     len(result), len(cached_items), len(ai_items))
+        return result
+    finally:
+        db.close()
 
 
-def _extract_batch(titles: list[str]) -> list[FoodTrendItem]:
-    """对一批标题调用 Claude Haiku 提取食物。"""
+def _extract_batch(
+    titles: list[str],
+) -> tuple[list[FoodTrendItem], dict[str, list[dict]]]:
+    """对一批标题调用 Claude 提取食物，返回 (items, {title: [food_dicts]})。"""
     client = Anthropic(api_key=CLAUDE_API_KEY)
 
     titles_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
@@ -91,21 +159,21 @@ def _extract_batch(titles: list[str]) -> list[FoodTrendItem]:
 如果某个标题没有食物，其 foods 为空数组。"""
 
     resp = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=CLAUDE_MODEL,
         max_tokens=2000,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    return _parse_response(resp.content[0].text)
+    return _parse_response(resp.content[0].text, titles)
 
 
-def _parse_response(text: str) -> list[FoodTrendItem]:
-    """解析 Claude 返回的 JSON，过滤并转为 FoodTrendItem。"""
-    # 提取 JSON（Claude 可能返回 markdown code block）
+def _parse_response(
+    text: str, original_titles: list[str]
+) -> tuple[list[FoodTrendItem], dict[str, list[dict]]]:
+    """解析 Claude 返回的 JSON，返回 items 和 title→foods 映射。"""
     json_text = text.strip()
     if json_text.startswith("```"):
-        # Remove markdown code fences
         lines = json_text.split("\n")
         json_lines = []
         in_block = False
@@ -121,29 +189,35 @@ def _parse_response(text: str) -> list[FoodTrendItem]:
         data = json.loads(json_text)
     except json.JSONDecodeError:
         logger.warning("AI 返回的 JSON 解析失败: %s", text[:200])
-        return []
+        return [], {}
 
     items: list[FoodTrendItem] = []
+    title_mapping: dict[str, list[dict]] = {t: [] for t in original_titles}
+
     for result in data.get("results", []):
+        title = result.get("title", "")
+        foods_for_title: list[dict] = []
         for food in result.get("foods", []):
             name = food.get("name", "").strip()
             category = food.get("category", "").strip()
 
-            # 过滤条件
             if not name or len(name) < 2 or len(name) > 10:
                 continue
             if name in FOOD_NAMES:
-                continue  # 已在词典中，跳过
+                continue
             if category not in VALID_CATEGORIES:
-                category = "小吃"  # 默认分类
+                category = "小吃"
 
-            items.append(
-                FoodTrendItem(
-                    food_name=name,
-                    heat_score=_DEFAULT_HEAT_SCORE,
-                    post_count=0,
-                    category=category,
-                )
-            )
+            foods_for_title.append({"name": name, "category": category})
+            items.append(FoodTrendItem(
+                food_name=name,
+                heat_score=_DEFAULT_HEAT_SCORE,
+                post_count=0,
+                category=category,
+            ))
 
-    return items
+        # 尝试匹配原标题
+        if title in title_mapping:
+            title_mapping[title] = foods_for_title
+
+    return items, title_mapping

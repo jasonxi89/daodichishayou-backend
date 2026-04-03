@@ -4,12 +4,21 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.8.0"
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'food_trends.db'}")
 API_PORT = int(os.getenv("API_PORT", "8900"))
 CRAWL_INTERVAL_HOURS = int(os.getenv("CRAWL_INTERVAL_HOURS", "6"))
+# 智能调度：cron 模式在饭点前加密采集 (CST 时区)
+# 格式: "HH:MM,HH:MM,..." — 默认 7:00, 10:30, 16:30, 22:00
+CRAWL_SCHEDULE_HOURS = os.getenv(
+    "CRAWL_SCHEDULE_HOURS", "7:00,10:30,16:30,22:00"
+)
+CRAWL_USE_SMART_SCHEDULE = os.getenv(
+    "CRAWL_USE_SMART_SCHEDULE", "true"
+).lower() == "true"
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
 AI_EXTRACT_ENABLED = os.getenv("AI_EXTRACT_ENABLED", "true").lower() == "true"
 RECIPE_SCRAPE_INTERVAL_DAYS = int(os.getenv("RECIPE_SCRAPE_INTERVAL_DAYS", "7"))
 

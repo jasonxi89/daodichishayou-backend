@@ -51,7 +51,7 @@ def test_parse_response_valid():
             },
         ]
     })
-    items = _parse_response(response)
+    items, mapping = _parse_response(response, ["酱香拿铁火了", "今天天气好"])
     assert len(items) == 1
     assert items[0].food_name == "酱香拿铁"
     assert items[0].category == "饮品"
@@ -63,7 +63,7 @@ def test_parse_response_filters_short_names():
     response = json.dumps({
         "results": [{"title": "t", "foods": [{"name": "鱼", "category": "正餐"}]}]
     })
-    items = _parse_response(response)
+    items, _ = _parse_response(response, ["t"])
     assert len(items) == 0
 
 
@@ -74,7 +74,7 @@ def test_parse_response_filters_long_names():
             {"title": "t", "foods": [{"name": "超级无敌豪华版大号海鲜拼盘套餐", "category": "正餐"}]}
         ]
     })
-    items = _parse_response(response)
+    items, _ = _parse_response(response, ["t"])
     assert len(items) == 0
 
 
@@ -84,14 +84,15 @@ def test_parse_response_filters_existing_foods():
     response = json.dumps({
         "results": [{"title": "t", "foods": [{"name": "火锅", "category": "正餐"}]}]
     })
-    items = _parse_response(response)
+    items, _ = _parse_response(response, ["t"])
     assert len(items) == 0
 
 
 def test_parse_response_invalid_json():
     from app.crawler.ai_extractor import _parse_response
-    items = _parse_response("this is not json")
+    items, mapping = _parse_response("this is not json", ["t"])
     assert items == []
+    assert mapping == {}
 
 
 def test_parse_response_markdown_code_block():
@@ -101,7 +102,7 @@ def test_parse_response_markdown_code_block():
             {"title": "t", "foods": [{"name": "酱香拿铁", "category": "饮品"}]}
         ]
     }) + '\n```'
-    items = _parse_response(response)
+    items, _ = _parse_response(response, ["t"])
     assert len(items) == 1
     assert items[0].food_name == "酱香拿铁"
 
@@ -113,9 +114,18 @@ def test_parse_response_invalid_category_defaults():
             {"title": "t", "foods": [{"name": "新奇食物", "category": "不存在的分类"}]}
         ]
     })
-    items = _parse_response(response)
+    items, _ = _parse_response(response, ["t"])
     assert len(items) == 1
     assert items[0].category == "小吃"  # defaults to 小吃
+
+
+def _make_mock_db_session():
+    """Create a mock DB session that returns no cached results."""
+    mock_db = MagicMock()
+    mock_execute = MagicMock()
+    mock_execute.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = mock_execute
+    return mock_db
 
 
 def test_extract_deduplicates_titles(mock_ai_enabled):
@@ -127,7 +137,9 @@ def test_extract_deduplicates_titles(mock_ai_enabled):
             {"title": "t2", "foods": [{"name": "酱香拿铁", "category": "饮品"}]},
         ]
     }))]
-    with patch("app.crawler.ai_extractor.Anthropic") as mock_cls:
+    mock_db = _make_mock_db_session()
+    with patch("app.crawler.ai_extractor.Anthropic") as mock_cls, \
+         patch("app.crawler.ai_extractor.SessionLocal", return_value=mock_db):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
         mock_client.messages.create.return_value = mock_resp
@@ -139,7 +151,9 @@ def test_extract_deduplicates_titles(mock_ai_enabled):
 
 def test_extract_api_error_handled(mock_ai_enabled):
     from app.crawler.ai_extractor import extract_foods_from_titles
-    with patch("app.crawler.ai_extractor.Anthropic") as mock_cls:
+    mock_db = _make_mock_db_session()
+    with patch("app.crawler.ai_extractor.Anthropic") as mock_cls, \
+         patch("app.crawler.ai_extractor.SessionLocal", return_value=mock_db):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
         mock_client.messages.create.side_effect = RuntimeError("API error")
