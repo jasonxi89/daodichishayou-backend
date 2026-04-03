@@ -136,3 +136,114 @@ def test_get_trending_limit_max(client):
 def test_get_trending_offset_negative(client):
     resp = client.get("/api/trending?offset=-1")
     assert resp.status_code == 422
+
+
+# --- Digest endpoint tests ---
+
+
+def test_get_digest_empty(client):
+    resp = client.get("/api/trending/digest")
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+def test_get_digest_returns_today(client, db):
+    import json
+    from datetime import date, datetime
+    from app.models import FoodDigest
+    db.add(FoodDigest(
+        digest_date=datetime.combine(date.today(), datetime.min.time()),
+        summary="今日火锅最火",
+        top_foods=json.dumps(["火锅", "奶茶"]),
+        recommendation="来份火锅",
+    ))
+    db.commit()
+
+    resp = client.get("/api/trending/digest")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["summary"] == "今日火锅最火"
+    assert data["top_foods"] == ["火锅", "奶茶"]
+    assert data["recommendation"] == "来份火锅"
+
+
+def test_get_digest_by_date(client, db):
+    import json
+    from datetime import datetime
+    from app.models import FoodDigest
+    target = datetime(2026, 3, 15)
+    db.add(FoodDigest(
+        digest_date=target,
+        summary="三月中旬快报",
+        top_foods=json.dumps(["螺蛳粉"]),
+        recommendation="春天吃螺蛳粉",
+    ))
+    db.commit()
+
+    resp = client.get("/api/trending/digest?date=2026-03-15")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["summary"] == "三月中旬快报"
+
+
+def test_get_digest_nonexistent_date(client):
+    resp = client.get("/api/trending/digest?date=2020-01-01")
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+# --- History endpoint tests ---
+
+
+def test_get_history_empty(client):
+    resp = client.get("/api/trending/history/火锅")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["food_name"] == "火锅"
+    assert data["history"] == []
+
+
+def test_get_history_returns_snapshots(client, db):
+    from datetime import date
+    from app.models import FoodTrendSnapshot
+    for i, d in enumerate([date(2026, 4, 1), date(2026, 4, 2), date(2026, 4, 3)]):
+        db.add(FoodTrendSnapshot(
+            snapshot_date=d,
+            food_name="火锅",
+            heat_score=80 + i * 5,
+            source="toutiao",
+            category="正餐",
+        ))
+    db.commit()
+
+    resp = client.get("/api/trending/history/火锅?days=7")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["food_name"] == "火锅"
+    assert len(data["history"]) == 3
+    # Should be sorted desc
+    scores = [h["heat_score"] for h in data["history"]]
+    assert scores == [90, 85, 80]
+
+
+def test_get_history_respects_days_limit(client, db):
+    from datetime import date
+    from app.models import FoodTrendSnapshot
+    for i in range(10):
+        db.add(FoodTrendSnapshot(
+            snapshot_date=date(2026, 3, 20 + i),
+            food_name="奶茶",
+            heat_score=70 + i,
+            source="baidu_suggest",
+        ))
+    db.commit()
+
+    resp = client.get("/api/trending/history/奶茶?days=3")
+    data = resp.json()
+    assert len(data["history"]) == 3
+
+
+def test_get_history_nonexistent_food(client):
+    resp = client.get("/api/trending/history/不存在的食物")
+    assert resp.status_code == 200
+    assert resp.json()["history"] == []

@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -117,8 +117,9 @@ def get_digest(
 ):
     """获取指定日期的美食趋势快报，默认今日。"""
     target = target_date or date.today()
+    target_dt = datetime.combine(target, time.min)
     digest = db.execute(
-        select(FoodDigest).where(FoodDigest.digest_date == target)
+        select(FoodDigest).where(FoodDigest.digest_date == target_dt)
     ).scalar_one_or_none()
 
     if not digest:

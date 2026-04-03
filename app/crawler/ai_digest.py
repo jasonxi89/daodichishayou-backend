@@ -87,7 +87,7 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
         logger.error("AI 趋势总结 JSON 解析失败: %s", raw_text[:300])
         return None
 
-    today = date.today()
+    today = datetime.combine(date.today(), datetime.min.time())
     summary = data.get("summary", "")
     top_foods = data.get("top_foods", [])
     recommendation = data.get("recommendation", "")
