@@ -12,6 +12,11 @@ class FoodTrendOut(BaseModel):
     category: str | None = None
     image_url: str | None = None
     updated_at: datetime
+    canonical_name: str | None = None
+    aliases: list[str] = []
+    sources: list[str] = []
+    trend_type: str | None = None
+    trend_context: str | None = None
 
     model_config = {"from_attributes": True}
 
