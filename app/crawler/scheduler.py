@@ -131,8 +131,21 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
         if all_unmatched:
             ai_items = extract_foods_from_titles(all_unmatched)
             if ai_items:
-                saved = _save_items(db, "ai_extract", ai_items)
-                _save_ai_discoveries(db, ai_items)
+                # Task 4/6 shim: adapt ExtractedFoodItem → FoodTrendItem for legacy
+                # _save_items/_save_ai_discoveries. Task 6 will replace this with
+                # _save_extracted_items that consumes ExtractedFoodItem directly
+                # (and populates canonical_name/trend_type/trend_context fields).
+                compat_items = [
+                    FoodTrendItem(
+                        food_name=item.name,
+                        heat_score=50,
+                        post_count=0,
+                        category=item.category or "小吃",
+                    )
+                    for item in ai_items
+                ]
+                saved = _save_items(db, "ai_extract", compat_items)
+                _save_ai_discoveries(db, compat_items)
                 db.add(
                     CrawlLog(source="ai_extract", status="success", items_count=saved)
                 )

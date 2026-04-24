@@ -198,7 +198,8 @@ def test_run_all_crawlers_collects_unmatched(db):
             self.unmatched_titles = ["酱香拿铁火了", "天气预报"]
             return [FoodTrendItem("火锅", heat_score=90)]
 
-    ai_items = [FoodTrendItem("酱香拿铁", heat_score=50, category="饮品")]
+    from app.crawler.ai_extractor import ExtractedFoodItem
+    ai_items = [ExtractedFoodItem(name="酱香拿铁", category="饮品")]
     with patch("app.crawler.scheduler.ALL_CRAWLERS", [UnmatchedCrawler()]), \
          patch("app.crawler.scheduler.extract_foods_from_titles", return_value=ai_items):
         results = run_all_crawlers(db)
