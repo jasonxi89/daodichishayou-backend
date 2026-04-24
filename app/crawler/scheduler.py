@@ -91,7 +91,13 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
         source = crawler.get_source_name()
         try:
             items = crawler.crawl()
-            saved = _save_items(db, source, items)
+            if source == "baidu_suggest":
+                _save_candidates(db, items)
+                saved = len(items)
+                message = f"百度候选写入 ai_discovered_foods: {saved} 条"
+            else:
+                saved = _save_items(db, source, items)
+                message = f"抓取完成，保存{saved}条"
             all_unmatched.extend(crawler.unmatched_titles)
             db.add(
                 CrawlLog(source=source, status="success", items_count=saved)
@@ -102,7 +108,7 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
                     source=source,
                     status="success",
                     items_count=saved,
-                    message=f"抓取完成，保存{saved}条",
+                    message=message,
                 )
             )
             logger.info("爬虫 %s 完成: %d 条", source, saved)
@@ -188,6 +194,12 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
         )
         logger.error("AI 提取失败: %s", e, exc_info=True)
 
+    # 候选词晋级：baidu_suggest 候选 + 其他源佐证 → 进主表
+    try:
+        _promote_candidates(db)
+    except Exception:
+        logger.error("候选词晋级失败", exc_info=True)
+
     # 保存今日热度快照
     _save_daily_snapshot(db)
 
@@ -248,6 +260,63 @@ def _save_ai_discoveries(db: Session, items: list[FoodTrendItem]) -> None:
                     category=item.category,
                 )
             )
+    db.commit()
+
+
+def _save_candidates(db: Session, items: list[FoodTrendItem]) -> None:
+    """把候选源（如 baidu_suggest）的 items 写入 ai_discovered_foods，不入主表。"""
+    for item in items:
+        existing = db.execute(
+            select(AIDiscoveredFood).where(AIDiscoveredFood.food_name == item.food_name)
+        ).scalar_one_or_none()
+        if existing:
+            existing.discovery_count += 1
+        else:
+            db.add(AIDiscoveredFood(
+                food_name=item.food_name,
+                category=item.category,
+            ))
+    db.commit()
+
+
+def _promote_candidates(db: Session) -> None:
+    """把有其他源佐证的候选词晋级到 food_trends（source='baidu_suggest'）。"""
+    pending = db.execute(
+        select(AIDiscoveredFood).where(AIDiscoveredFood.promoted_to_trends.is_(False))
+    ).scalars().all()
+
+    for candidate in pending:
+        other_src_max = db.execute(
+            select(FoodTrend.heat_score).where(
+                FoodTrend.food_name == candidate.food_name,
+                FoodTrend.source != "baidu_suggest",
+            ).order_by(FoodTrend.heat_score.desc()).limit(1)
+        ).scalar_one_or_none()
+
+        if other_src_max is None:
+            continue
+
+        existing_bs = db.execute(
+            select(FoodTrend).where(
+                FoodTrend.food_name == candidate.food_name,
+                FoodTrend.source == "baidu_suggest",
+            )
+        ).scalar_one_or_none()
+        new_score = int(other_src_max * 0.8)
+        if existing_bs:
+            existing_bs.heat_score = new_score
+            existing_bs.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(FoodTrend(
+                food_name=candidate.food_name,
+                source="baidu_suggest",
+                heat_score=new_score,
+                post_count=candidate.discovery_count,
+                category=candidate.category,
+                canonical_name=candidate.food_name,
+            ))
+        candidate.promoted_to_trends = True
+
     db.commit()
 
 
