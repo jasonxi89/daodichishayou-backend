@@ -3,14 +3,14 @@
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 
 from anthropic import Anthropic
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import AI_CORE_RULES, CLAUDE_API_KEY, CLAUDE_MODEL, AI_EXTRACT_ENABLED
-from app.crawler.base import FoodTrendItem
-from app.crawler.food_keywords import FOOD_NAMES
+from app.crawler.base import FoodTrendItem  # noqa: F401  crawlers still use this
 from app.database import SessionLocal
 from app.models import AITitleCache
 
@@ -22,28 +22,49 @@ VALID_CATEGORIES = {
     "轻食", "点心", "零食",
 }
 
-_SYSTEM_PROMPT = f"""{AI_CORE_RULES}
+VALID_TREND_TYPES = {"event", "seasonal", "evergreen", "meme"}
 
-你是一个美食识别专家。给你一批热搜标题，请从中提取出具体的食物/菜品/饮品名称。
 
-规则：
-1. 只提取具体的食物名，如"酱香拿铁"、"脏脏包"，不要提取泛称如"美食"、"小吃"
-2. 食物名长度 2-10 个字
-3. 每个食物必须归入以下分类之一：正餐、小吃、面食、烧烤、火锅、西餐、日料、韩餐、东南亚、甜品、饮品、早餐、轻食、点心、零食
-4. 如果标题中没有具体食物，返回空数组
-5. 只返回真实存在的食物，不要编造"""
+@dataclass
+class ExtractedFoodItem:
+    name: str
+    category: str | None = None
+    canonical_of: str | None = None
+    trend_type: str | None = None
+    trend_context: str | None = None
+    source_title: str | None = None
+
 
 _MAX_TITLES_PER_BATCH = 50
 _DEFAULT_HEAT_SCORE = 50
+
+_SYSTEM_PROMPT = f"""{AI_CORE_RULES}
+
+你是一个美食识别+趋势分析专家。给你一批热搜标题，请对每条标题完成 3 件事：
+1. 提取具体食物/菜品/饮品名称
+2. 给每个食物归入分类
+3. 判断该食物当前热度的归因类型 + 关联上下文
+
+规则：
+- 只提取具体食物名，不要提取泛称如"美食"、"小吃"
+- 食物名长度 2-10 个字
+- 每个食物必须归入：正餐/小吃/面食/烧烤/火锅/西餐/日料/韩餐/东南亚/甜品/饮品/早餐/轻食/点心/零食
+- canonical_of：如果这个食物是某个已知食物的别名（如"川式火锅"→"火锅"、"酱香拿铁"→"拿铁"），填规范名；否则填本名
+- trend_type：event(综艺/直播/事件带火) | seasonal(季节相关) | evergreen(长青品类) | meme(网络梗)
+- trend_context：≤15 字，解释为何火（如"综艺XX同款"、"入冬涮锅季"）；如果是 evergreen 可为空
+- 如果标题没有食物，foods 返回空数组
+- 只返回真实存在的食物，不要编造"""
 
 
 def _hash_title(title: str) -> str:
     return hashlib.sha256(title.strip().encode()).hexdigest()
 
 
-def _load_cached(db: Session, titles: list[str]) -> tuple[list[FoodTrendItem], list[str]]:
+def _load_cached(
+    db: Session, titles: list[str]
+) -> tuple[list[ExtractedFoodItem], list[str]]:
     """从缓存加载已处理标题的结果，返回 (缓存命中的items, 需要调 AI 的titles)。"""
-    cached_items: list[FoodTrendItem] = []
+    cached_items: list[ExtractedFoodItem] = []
     uncached_titles: list[str] = []
 
     for title in titles:
@@ -53,16 +74,23 @@ def _load_cached(db: Session, titles: list[str]) -> tuple[list[FoodTrendItem], l
         ).scalar_one_or_none()
 
         if row:
-            foods = json.loads(row.extracted_foods)
+            try:
+                foods = json.loads(row.extracted_foods)
+            except json.JSONDecodeError:
+                uncached_titles.append(title)
+                continue
             for food in foods:
                 name = food.get("name", "")
-                if name and name not in FOOD_NAMES:
-                    cached_items.append(FoodTrendItem(
-                        food_name=name,
-                        heat_score=_DEFAULT_HEAT_SCORE,
-                        post_count=0,
-                        category=food.get("category", "小吃"),
-                    ))
+                if not name:
+                    continue
+                cached_items.append(ExtractedFoodItem(
+                    name=name,
+                    category=food.get("category"),
+                    canonical_of=food.get("canonical_of") or name,
+                    trend_type=food.get("trend_type"),
+                    trend_context=food.get("trend_context"),
+                    source_title=title,
+                ))
         else:
             uncached_titles.append(title)
 
@@ -83,7 +111,7 @@ def _save_cache(db: Session, title: str, foods: list[dict]) -> None:
         ))
 
 
-def extract_foods_from_titles(titles: list[str]) -> list[FoodTrendItem]:
+def extract_foods_from_titles(titles: list[str]) -> list[ExtractedFoodItem]:
     """从未匹配的热搜标题中用 AI 提取食物名（带哈希缓存）。"""
     if not AI_EXTRACT_ENABLED:
         logger.info("AI 提取已禁用")
@@ -107,7 +135,7 @@ def extract_foods_from_titles(titles: list[str]) -> list[FoodTrendItem]:
             len(uncached_titles),
         )
 
-        ai_items: list[FoodTrendItem] = []
+        ai_items: list[ExtractedFoodItem] = []
         if uncached_titles:
             for i in range(0, len(uncached_titles), _MAX_TITLES_PER_BATCH):
                 batch = uncached_titles[i:i + _MAX_TITLES_PER_BATCH]
@@ -128,10 +156,10 @@ def extract_foods_from_titles(titles: list[str]) -> list[FoodTrendItem]:
 
         all_items = cached_items + ai_items
         # 去重
-        seen: dict[str, FoodTrendItem] = {}
+        seen: dict[str, ExtractedFoodItem] = {}
         for item in all_items:
-            if item.food_name not in seen:
-                seen[item.food_name] = item
+            if item.name not in seen:
+                seen[item.name] = item
 
         result = list(seen.values())
         logger.info("AI 提取: 发现 %d 种新食物 (缓存 %d + AI %d)",
@@ -143,18 +171,18 @@ def extract_foods_from_titles(titles: list[str]) -> list[FoodTrendItem]:
 
 def _extract_batch(
     titles: list[str],
-) -> tuple[list[FoodTrendItem], dict[str, list[dict]]]:
+) -> tuple[list[ExtractedFoodItem], dict[str, list[dict]]]:
     """对一批标题调用 Claude 提取食物，返回 (items, {title: [food_dicts]})。"""
     client = Anthropic(api_key=CLAUDE_API_KEY)
 
     titles_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
-    user_prompt = f"""请从以下热搜标题中提取具体的食物/菜品/饮品名称。
+    user_prompt = f"""请对以下热搜标题提取食物 + 归因。
 
 热搜标题：
 {titles_text}
 
-请严格按以下 JSON 格式返回：
-{{"results": [{{"title": "原标题", "foods": [{{"name": "食物名", "category": "分类"}}]}}]}}
+请严格按以下 JSON 格式返回（无 markdown，仅 JSON）：
+{{"results": [{{"title": "原标题", "foods": [{{"name": "食物名", "category": "分类", "canonical_of": "规范名或本名", "trend_type": "event|seasonal|evergreen|meme", "trend_context": "归因短语"}}]}}]}}
 
 如果某个标题没有食物，其 foods 为空数组。"""
 
@@ -170,7 +198,7 @@ def _extract_batch(
 
 def _parse_response(
     text: str, original_titles: list[str]
-) -> tuple[list[FoodTrendItem], dict[str, list[dict]]]:
+) -> tuple[list[ExtractedFoodItem], dict[str, list[dict]]]:
     """解析 Claude 返回的 JSON，返回 items 和 title→foods 映射。"""
     json_text = text.strip()
     if json_text.startswith("```"):
@@ -191,7 +219,7 @@ def _parse_response(
         logger.warning("AI 返回的 JSON 解析失败: %s", text[:200])
         return [], {}
 
-    items: list[FoodTrendItem] = []
+    items: list[ExtractedFoodItem] = []
     title_mapping: dict[str, list[dict]] = {t: [] for t in original_titles}
 
     for result in data.get("results", []):
@@ -200,23 +228,36 @@ def _parse_response(
         for food in result.get("foods", []):
             name = food.get("name", "").strip()
             category = food.get("category", "").strip()
+            canonical_of = food.get("canonical_of", "").strip() or name
+            trend_type = food.get("trend_type", "").strip() or None
+            trend_context = food.get("trend_context", "").strip() or None
 
             if not name or len(name) < 2 or len(name) > 10:
                 continue
-            if name in FOOD_NAMES:
-                continue
             if category not in VALID_CATEGORIES:
                 category = "小吃"
+            if trend_type not in VALID_TREND_TYPES:
+                trend_type = None
+            if trend_context and len(trend_context) > 15:
+                trend_context = trend_context[:15]
 
-            foods_for_title.append({"name": name, "category": category})
-            items.append(FoodTrendItem(
-                food_name=name,
-                heat_score=_DEFAULT_HEAT_SCORE,
-                post_count=0,
+            food_dict = {
+                "name": name,
+                "category": category,
+                "canonical_of": canonical_of,
+                "trend_type": trend_type,
+                "trend_context": trend_context,
+            }
+            foods_for_title.append(food_dict)
+            items.append(ExtractedFoodItem(
+                name=name,
                 category=category,
+                canonical_of=canonical_of,
+                trend_type=trend_type,
+                trend_context=trend_context,
+                source_title=title,
             ))
 
-        # 尝试匹配原标题
         if title in title_mapping:
             title_mapping[title] = foods_for_title
 
