@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -20,6 +20,11 @@ class FoodTrend(Base):
     post_count: Mapped[int] = mapped_column(Integer, default=0)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    canonical_name: Mapped[str | None] = mapped_column(
+        String(100), index=True, nullable=True
+    )
+    trend_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    trend_context: Mapped[str | None] = mapped_column(String(100), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
@@ -54,6 +59,7 @@ class AIDiscoveredFood(Base):
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     discovery_count: Mapped[int] = mapped_column(Integer, default=1)
+    promoted_to_trends: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
@@ -139,3 +145,17 @@ class FoodsCategoryCache(Base):
     foods: Mapped[str] = mapped_column(String(10000))  # JSON array string
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class FoodAlias(Base):
+    """食物别名 → 规范名映射，支持同义归并。"""
+    __tablename__ = "food_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    alias_name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    canonical_name: Mapped[str] = mapped_column(String(100), index=True)
+    created_by: Mapped[str] = mapped_column(String(20))
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
