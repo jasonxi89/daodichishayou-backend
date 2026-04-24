@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.crawler.ai_extractor import extract_foods_from_titles
+from app.crawler.ai_extractor import ExtractedFoodItem, extract_foods_from_titles
 from app.crawler.base import BaseCrawler, FoodTrendItem
 from app.crawler.baidu_suggest import BaiduSuggestCrawler
 from app.crawler.dailyhot import DailyHotCrawler
@@ -13,7 +13,7 @@ from app.crawler.recipe_base import RecipeItem
 from app.crawler.toutiao import ToutiaoCrawler
 from app.crawler.xiachufang import XiachufangScraper
 from app.database import SessionLocal
-from app.models import AIDiscoveredFood, CrawlLog, FoodTrend, FoodTrendSnapshot, Recipe
+from app.models import AIDiscoveredFood, CrawlLog, FoodAlias, FoodTrend, FoodTrendSnapshot, Recipe
 from app.schemas import CrawlResult
 
 logger = logging.getLogger(__name__)
@@ -137,21 +137,8 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
         if all_unmatched:
             ai_items = extract_foods_from_titles(all_unmatched)
             if ai_items:
-                # Task 4/6 shim: adapt ExtractedFoodItem → FoodTrendItem for legacy
-                # _save_items/_save_ai_discoveries. Task 6 will replace this with
-                # _save_extracted_items that consumes ExtractedFoodItem directly
-                # (and populates canonical_name/trend_type/trend_context fields).
-                compat_items = [
-                    FoodTrendItem(
-                        food_name=item.name,
-                        heat_score=50,
-                        post_count=0,
-                        category=item.category or "小吃",
-                    )
-                    for item in ai_items
-                ]
-                saved = _save_items(db, "ai_extract", compat_items)
-                _save_ai_discoveries(db, compat_items)
+                saved = _save_extracted_items(db, ai_items)
+                _save_ai_discoveries_from_extracted(db, ai_items)
                 db.add(
                     CrawlLog(source="ai_extract", status="success", items_count=saved)
                 )
@@ -260,6 +247,79 @@ def _save_ai_discoveries(db: Session, items: list[FoodTrendItem]) -> None:
                     category=item.category,
                 )
             )
+    db.commit()
+
+
+def _save_extracted_items(db: Session, items: list[ExtractedFoodItem]) -> int:
+    """把 AI 提取的 ExtractedFoodItem 写入 food_trends (source='ai_extract')。
+
+    同时处理：
+    - 若 canonical_of != name → 插入 food_aliases (created_by='ai')
+    - food_trends.canonical_name 写入 canonical_of
+    - trend_type/trend_context 写入对应列
+    """
+    count = 0
+    for item in items:
+        if item.canonical_of and item.canonical_of != item.name:
+            existing_alias = db.execute(
+                select(FoodAlias).where(FoodAlias.alias_name == item.name)
+            ).scalar_one_or_none()
+            if not existing_alias:
+                db.add(FoodAlias(
+                    alias_name=item.name,
+                    canonical_name=item.canonical_of,
+                    created_by="ai",
+                ))
+
+        existing = db.execute(
+            select(FoodTrend).where(
+                FoodTrend.food_name == item.name,
+                FoodTrend.source == "ai_extract",
+            )
+        ).scalar_one_or_none()
+
+        canonical = item.canonical_of or item.name
+
+        if existing:
+            existing.category = item.category or existing.category
+            existing.canonical_name = canonical
+            existing.trend_type = item.trend_type or existing.trend_type
+            existing.trend_context = item.trend_context or existing.trend_context
+            existing.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(FoodTrend(
+                food_name=item.name,
+                source="ai_extract",
+                heat_score=50,
+                post_count=0,
+                category=item.category,
+                canonical_name=canonical,
+                trend_type=item.trend_type,
+                trend_context=item.trend_context,
+            ))
+        count += 1
+
+    db.commit()
+    return count
+
+
+def _save_ai_discoveries_from_extracted(
+    db: Session, items: list[ExtractedFoodItem]
+) -> None:
+    """记录 AI 发现的新食物到 ai_discovered_foods 表。"""
+    for item in items:
+        existing = db.execute(
+            select(AIDiscoveredFood).where(
+                AIDiscoveredFood.food_name == item.name
+            )
+        ).scalar_one_or_none()
+        if existing:
+            existing.discovery_count += 1
+        else:
+            db.add(AIDiscoveredFood(
+                food_name=item.name,
+                category=item.category,
+            ))
     db.commit()
 
 
