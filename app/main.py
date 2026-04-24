@@ -28,6 +28,13 @@ scheduler = BackgroundScheduler()
 async def lifespan(app: FastAPI):
     # Startup
     Base.metadata.create_all(bind=engine)
+    try:
+        from app.migrations.backfill_v1_9_0 import migrate_v1_9_0
+        migrate_v1_9_0(engine)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "v1.9.0 迁移失败，跳过继续启动", exc_info=True
+        )
     seed_data()
 
     if CRAWL_USE_SMART_SCHEDULE:
