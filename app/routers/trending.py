@@ -26,8 +26,21 @@ def get_trending(
     offset: int = Query(0, ge=0),
     source: str | None = Query(None),
     category: str | None = Query(None),
+    aggregate: bool = Query(True, description="按 canonical_name 聚合去重"),
     db: Session = Depends(get_db),
 ):
+    if aggregate:
+        return _get_trending_aggregated(db, limit, offset, source, category)
+    return _get_trending_raw(db, limit, offset, source, category)
+
+
+def _get_trending_raw(
+    db: Session,
+    limit: int,
+    offset: int,
+    source: str | None,
+    category: str | None,
+) -> TrendingResponse:
     stmt = select(FoodTrend)
     count_stmt = select(func.count(FoodTrend.id))
 
@@ -47,6 +60,55 @@ def get_trending(
         .all()
     )
     return TrendingResponse(total=total, items=items)
+
+
+def _get_trending_aggregated(
+    db: Session,
+    limit: int,
+    offset: int,
+    source: str | None,
+    category: str | None,
+) -> TrendingResponse:
+    stmt = select(FoodTrend)
+    if source:
+        stmt = stmt.where(FoodTrend.source == source)
+    if category:
+        stmt = stmt.where(FoodTrend.category == category)
+
+    all_rows = db.execute(stmt).scalars().all()
+
+    groups: dict[str, list[FoodTrend]] = {}
+    for row in all_rows:
+        key = row.canonical_name or row.food_name
+        groups.setdefault(key, []).append(row)
+
+    aggregated: list[FoodTrendOut] = []
+    for canonical, rows in groups.items():
+        top = max(rows, key=lambda r: r.heat_score)
+        aliases = sorted({r.food_name for r in rows})
+        sources = sorted({r.source for r in rows})
+        trend_type = next((r.trend_type for r in rows if r.trend_type), None)
+        trend_context = next((r.trend_context for r in rows if r.trend_context), None)
+        aggregated.append(FoodTrendOut(
+            id=top.id,
+            food_name=top.food_name,
+            source=top.source,
+            heat_score=top.heat_score,
+            post_count=sum(r.post_count for r in rows),
+            category=top.category,
+            image_url=top.image_url,
+            updated_at=top.updated_at,
+            canonical_name=canonical,
+            aliases=aliases,
+            sources=sources,
+            trend_type=trend_type,
+            trend_context=trend_context,
+        ))
+
+    aggregated.sort(key=lambda x: x.heat_score, reverse=True)
+    total = len(aggregated)
+    page = aggregated[offset: offset + limit]
+    return TrendingResponse(total=total, items=page)
 
 
 @router.get("/categories", response_model=list[str])
@@ -115,18 +177,20 @@ def get_digest(
     target_date: date | None = Query(None, alias="date"),
     db: Session = Depends(get_db),
 ):
-    """获取指定日期的美食趋势快报，默认今日。"""
-    target = target_date or date.today()
-    target_dt = datetime.combine(target, time.min)
-    digest = db.execute(
-        select(FoodDigest).where(FoodDigest.digest_date == target_dt)
-    ).scalar_one_or_none()
+    """获取美食趋势快报。无 date 参数时 fallback 到最新一条。"""
+    if target_date is None:
+        digest = db.execute(
+            select(FoodDigest).order_by(FoodDigest.digest_date.desc()).limit(1)
+        ).scalar_one_or_none()
+    else:
+        target_dt = datetime.combine(target_date, time.min)
+        digest = db.execute(
+            select(FoodDigest).where(FoodDigest.digest_date == target_dt)
+        ).scalar_one_or_none()
 
     if not digest:
         return None
 
-    # 反序列化 top_foods 供 response_model 使用
-    digest._top_foods_list = json.loads(digest.top_foods)
     return FoodDigestOut(
         id=digest.id,
         digest_date=digest.digest_date,

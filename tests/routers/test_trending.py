@@ -10,7 +10,8 @@ def test_get_trending_empty(client):
 
 
 def test_get_trending_returns_items(client, sample_trends):
-    resp = client.get("/api/trending")
+    # aggregate=false to check raw row count (火锅 appears twice from different sources)
+    resp = client.get("/api/trending?aggregate=false")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 5
@@ -18,14 +19,15 @@ def test_get_trending_returns_items(client, sample_trends):
 
 
 def test_get_trending_sorted_by_heat_score(client, sample_trends):
-    resp = client.get("/api/trending")
+    resp = client.get("/api/trending?aggregate=false")
     items = resp.json()["items"]
     scores = [i["heat_score"] for i in items]
     assert scores == sorted(scores, reverse=True)
 
 
 def test_get_trending_limit(client, sample_trends):
-    resp = client.get("/api/trending?limit=2")
+    # aggregate=false: 5 raw rows; limit=2 returns 2 items, total=5
+    resp = client.get("/api/trending?limit=2&aggregate=false")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["items"]) == 2
@@ -33,13 +35,15 @@ def test_get_trending_limit(client, sample_trends):
 
 
 def test_get_trending_offset(client, sample_trends):
-    resp = client.get("/api/trending?offset=3")
+    # aggregate=false: 5 raw rows; offset=3 returns last 2
+    resp = client.get("/api/trending?offset=3&aggregate=false")
     data = resp.json()
     assert len(data["items"]) == 2
 
 
 def test_get_trending_filter_source(client, sample_trends):
-    resp = client.get("/api/trending?source=toutiao")
+    # aggregate=false: toutiao has 2 raw rows (火锅 + 奶茶), source filter preserved
+    resp = client.get("/api/trending?source=toutiao&aggregate=false")
     data = resp.json()
     assert data["total"] == 2
     for item in data["items"]:
@@ -47,7 +51,8 @@ def test_get_trending_filter_source(client, sample_trends):
 
 
 def test_get_trending_filter_category(client, sample_trends):
-    resp = client.get("/api/trending?category=正餐")
+    # aggregate=false: 正餐 has 2 raw rows (火锅 from toutiao + baidu_suggest)
+    resp = client.get("/api/trending?category=正餐&aggregate=false")
     data = resp.json()
     assert data["total"] == 2
     for item in data["items"]:
