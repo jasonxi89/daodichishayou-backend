@@ -17,14 +17,21 @@ _SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 
 你是一位美食趋势分析师。根据今日各平台热搜美食数据，生成一份简洁的美食趋势快报。
 
+数据说明：每条记录带 trend_type 和 trend_context 标注。
+- type=event: 事件/综艺/直播带火，context 是关联事件（引用可让叙事更生动）
+- type=seasonal: 季节相关，context 是节气/季节关联
+- type=evergreen: 长青品类，无需特殊归因
+- type=meme: 网络梗/社交话题
+- type=None 或 context=None: 未标注，按常识解读
+
 要求：
-1. 总结当前最火的 3-5 种美食，说明为什么火（季节、节日、综艺、社交媒体带货等可能原因）
+1. 总结当前最火的 3-5 种美食，结合 trend_context 说明"为什么火"（而非仅列热度数字）
 2. 发现趋势变化：哪些食物在上升、哪些在下降
 3. 给出一句话"今日推荐"，适合当天吃的食物建议
-4. 风格轻松有趣，适合年轻人阅读，100-200字即可
+4. 风格轻松有趣，适合年轻人阅读，100-200 字即可
 5. 只分析提供的数据，不要编造数据中没有的食物
 
-返回格式（纯JSON，无markdown）：
+返回格式（纯 JSON，无 markdown）：
 {{"summary": "趋势快报正文", "top_foods": ["食物1", "食物2", "食物3"], "recommendation": "今日推荐一句话"}}"""
 
 
@@ -52,9 +59,11 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
     # 构建数据摘要给 AI
     data_lines = []
     for item in top_items:
+        type_str = f" type:{item.trend_type}" if item.trend_type else " type:None"
+        ctx_str = f" context:{item.trend_context}" if item.trend_context else ""
         data_lines.append(
             f"- {item.food_name}（{item.category or '未分类'}）"
-            f" 热度:{item.heat_score} 来源:{item.source}"
+            f" 热度:{item.heat_score} 来源:{item.source}{type_str}{ctx_str}"
         )
     data_text = "\n".join(data_lines)
 
