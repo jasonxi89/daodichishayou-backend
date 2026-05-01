@@ -28,21 +28,21 @@ VALID_DISHES_JSON = json.dumps({
 
 
 def test_recommend_no_api_key(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "")
     resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
     assert resp.status_code == 500
-    assert "CLAUDE_API_KEY" in resp.json()["detail"]
+    assert "DEEPSEEK_API_KEY" in resp.json()["detail"]
 
 
 def test_recommend_empty_ingredients(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     resp = client.post("/api/recommend", json={"ingredients": []})
     assert resp.status_code == 400
     assert "ingredient" in resp.json()["detail"].lower()
 
 
 def test_recommend_success(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -57,7 +57,7 @@ def test_recommend_success(client, monkeypatch):
 
 
 def test_recommend_count_clamped_to_max_5(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -72,7 +72,7 @@ def test_recommend_count_clamped_to_max_5(client, monkeypatch):
 
 
 def test_recommend_count_clamped_to_min_1(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -83,7 +83,7 @@ def test_recommend_count_clamped_to_min_1(client, monkeypatch):
 
 
 def test_recommend_strips_markdown_fence(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -96,7 +96,7 @@ def test_recommend_strips_markdown_fence(client, monkeypatch):
 
 
 def test_recommend_json_parse_fail_returns_502(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -108,7 +108,7 @@ def test_recommend_json_parse_fail_returns_502(client, monkeypatch):
 
 def test_recommend_api_error_returns_502(client, monkeypatch):
     import anthropic as anthropic_module
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -121,7 +121,7 @@ def test_recommend_api_error_returns_502(client, monkeypatch):
 
 
 def test_recommend_with_preferences(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -137,7 +137,7 @@ def test_recommend_with_preferences(client, monkeypatch):
 
 
 def test_recommend_optional_dish_fields(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -155,7 +155,7 @@ def test_recommend_optional_dish_fields(client, monkeypatch):
 
 
 def test_recommend_empty_dishes_list(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -167,7 +167,7 @@ def test_recommend_empty_dishes_list(client, monkeypatch):
 
 
 def test_recommend_allow_extra_uses_extra_prompt(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -185,7 +185,7 @@ def test_recommend_allow_extra_uses_extra_prompt(client, monkeypatch):
 
 
 def test_recommend_default_uses_standard_prompt(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -203,7 +203,7 @@ def test_recommend_default_uses_standard_prompt(client, monkeypatch):
 
 
 def test_recommend_extra_ingredients_parsed(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -248,7 +248,7 @@ def _insert_recipe(db, name, ingredients_text, ingredients_json, steps_json, rat
 
 def test_recommend_local_hit(client, db, monkeypatch):
     """Local recipes satisfy count → Claude API not called."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}, {"name": "鸡蛋", "amount": "3个"}]),
                    json.dumps([{"text": "切块"}, {"text": "炒熟"}]))
@@ -269,7 +269,7 @@ def test_recommend_local_hit(client, db, monkeypatch):
 
 def test_recommend_local_partial(client, db, monkeypatch):
     """Local has 1 recipe, need 2 → Claude called for remaining 1."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
                    json.dumps([{"text": "炒熟"}]))
@@ -295,7 +295,7 @@ def test_recommend_local_partial(client, db, monkeypatch):
 
 def test_recommend_local_empty(client, db, monkeypatch):
     """No local recipes → falls through to Claude."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
 
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
@@ -309,7 +309,7 @@ def test_recommend_local_empty(client, db, monkeypatch):
 
 def test_recommend_local_skip_when_allow_extra(client, db, monkeypatch):
     """allow_extra=True → skip local search, go straight to Claude."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
                    json.dumps([{"text": "炒熟"}]))
@@ -328,7 +328,7 @@ def test_recommend_local_skip_when_allow_extra(client, db, monkeypatch):
 
 def test_recommend_local_skip_when_preferences(client, db, monkeypatch):
     """preferences set → skip local search, go straight to Claude."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
                    json.dumps([{"text": "炒熟"}]))
@@ -346,7 +346,7 @@ def test_recommend_local_skip_when_preferences(client, db, monkeypatch):
 
 
 def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -372,7 +372,7 @@ VALID_FOODS_JSON = json.dumps({"foods": ["火锅", "串串香", "麻婆豆腐"]}
 
 
 def test_foods_by_category_success(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -386,14 +386,14 @@ def test_foods_by_category_success(client, monkeypatch):
 
 
 def test_foods_by_category_no_api_key(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "")
     resp = client.post("/api/foods-by-category", json={"category": "川菜"})
     assert resp.status_code == 500
-    assert "CLAUDE_API_KEY" in resp.json()["detail"]
+    assert "DEEPSEEK_API_KEY" in resp.json()["detail"]
 
 
 def test_foods_by_category_json_parse_fail(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -405,7 +405,7 @@ def test_foods_by_category_json_parse_fail(client, monkeypatch):
 
 def test_foods_by_category_api_error(client, monkeypatch):
     import anthropic as anthropic_module
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -418,7 +418,7 @@ def test_foods_by_category_api_error(client, monkeypatch):
 
 
 def test_foods_by_category_strips_markdown_fence(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -431,7 +431,7 @@ def test_foods_by_category_strips_markdown_fence(client, monkeypatch):
 
 
 def test_foods_by_category_count_clamped(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -459,7 +459,7 @@ def test_foods_by_category_cache_hit(client, db, monkeypatch):
     """When a valid (non-expired) cache exists, Claude API should NOT be called."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
 
     # Pre-insert a cache row with future expires_at
     cache_entry = FoodsCategoryCache(
@@ -487,7 +487,7 @@ def test_foods_by_category_cache_miss(client, db, monkeypatch):
     """When no cache exists, Claude API should be called and result stored in cache."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
 
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
@@ -513,7 +513,7 @@ def test_foods_by_category_cache_expired(client, db, monkeypatch):
     """When cache is expired, Claude API should be called (expired cache ignored)."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
 
     # Insert an expired cache row
     cache_entry = FoodsCategoryCache(
@@ -549,7 +549,7 @@ def test_bulk_all_cached(client, db, monkeypatch):
     """When all requested categories are cached, Claude API should NOT be called."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
 
     for cat, foods in [("家常下饭", ["红烧肉", "番茄炒蛋"]), ("火锅烫涮", ["四川火锅", "酸汤火锅"])]:
         db.add(FoodsCategoryCache(
@@ -573,7 +573,7 @@ def test_bulk_all_cached(client, db, monkeypatch):
 
 def test_bulk_none_cached(client, monkeypatch):
     """When no categories are cached, Claude API should be called once."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -591,7 +591,7 @@ def test_bulk_partial_cache(client, db, monkeypatch):
     """When some categories are cached and some are not, only uncached are sent to Claude."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
 
     # Cache only 家常下饭
     db.add(FoodsCategoryCache(
@@ -622,15 +622,15 @@ def test_bulk_partial_cache(client, db, monkeypatch):
 
 
 def test_bulk_no_api_key(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "")
     resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
     assert resp.status_code == 500
-    assert "CLAUDE_API_KEY" in resp.json()["detail"]
+    assert "DEEPSEEK_API_KEY" in resp.json()["detail"]
 
 
 def test_bulk_claude_error(client, monkeypatch):
     import anthropic as anthropic_module
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -642,7 +642,7 @@ def test_bulk_claude_error(client, monkeypatch):
 
 
 def test_bulk_json_parse_error(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     with patch("app.routers.recommend.anthropic.Anthropic") as mock_anthropic:
         mock_client = MagicMock()
         mock_anthropic.return_value = mock_client
@@ -653,7 +653,7 @@ def test_bulk_json_parse_error(client, monkeypatch):
 
 def test_bulk_empty_categories(client, monkeypatch):
     """Empty categories list should return empty results without calling Claude."""
-    monkeypatch.setattr("app.routers.recommend.CLAUDE_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.DEEPSEEK_API_KEY", "test-key")
     resp = client.post("/api/bulk-foods-by-category", json={"categories": []})
     assert resp.status_code == 200
     assert resp.json()["results"] == {}

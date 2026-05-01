@@ -13,7 +13,7 @@ def mock_ai_disabled():
 @pytest.fixture
 def mock_ai_enabled():
     with patch("app.crawler.ai_extractor.AI_EXTRACT_ENABLED", True), \
-         patch("app.crawler.ai_extractor.CLAUDE_API_KEY", "test-key"):
+         patch("app.crawler.ai_extractor.DEEPSEEK_API_KEY", "test-key"):
         yield
 
 
@@ -26,7 +26,7 @@ def test_extract_disabled(mock_ai_disabled):
 def test_extract_no_api_key():
     from app.crawler.ai_extractor import extract_foods_from_titles
     with patch("app.crawler.ai_extractor.AI_EXTRACT_ENABLED", True), \
-         patch("app.crawler.ai_extractor.CLAUDE_API_KEY", ""):
+         patch("app.crawler.ai_extractor.DEEPSEEK_API_KEY", ""):
         result = extract_foods_from_titles(["酱香拿铁大火"])
         assert result == []
 

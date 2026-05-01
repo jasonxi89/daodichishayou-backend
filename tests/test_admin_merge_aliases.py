@@ -28,7 +28,7 @@ def client():
 
 def test_merge_aliases_endpoint_returns_200(client):
     with patch("app.routers.admin.Anthropic") as mock_anth, \
-         patch("app.routers.admin.CLAUDE_API_KEY", "fake-key"):
+         patch("app.routers.admin.DEEPSEEK_API_KEY", "fake-key"):
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
         mock_resp = MagicMock()
@@ -48,7 +48,7 @@ def test_merge_aliases_writes_alias_and_updates_canonical(client):
 
     ai_response = '{"groups":[{"canonical":"火锅","aliases":["川式火锅","重庆火锅"]}]}'
     with patch("app.routers.admin.Anthropic") as mock_anth, \
-         patch("app.routers.admin.CLAUDE_API_KEY", "fake-key"):
+         patch("app.routers.admin.DEEPSEEK_API_KEY", "fake-key"):
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
         mock_resp = MagicMock()
@@ -76,6 +76,6 @@ def test_merge_aliases_writes_alias_and_updates_canonical(client):
 
 
 def test_merge_aliases_no_api_key_returns_error(client):
-    with patch("app.routers.admin.CLAUDE_API_KEY", ""):
+    with patch("app.routers.admin.DEEPSEEK_API_KEY", ""):
         resp = client.post("/api/admin/merge-aliases")
         assert resp.status_code == 503
