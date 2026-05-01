@@ -32,7 +32,7 @@ def test_merge_aliases_endpoint_returns_200(client):
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
         mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text='{"groups":[]}')]
+        mock_resp.content = [MagicMock(type='text', text='{"groups":[]}')]
         mock_client.messages.create.return_value = mock_resp
 
         resp = client.post("/api/admin/merge-aliases")
@@ -52,7 +52,7 @@ def test_merge_aliases_writes_alias_and_updates_canonical(client):
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
         mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=ai_response)]
+        mock_resp.content = [MagicMock(type='text', text=ai_response)]
         mock_client.messages.create.return_value = mock_resp
 
         resp = client.post("/api/admin/merge-aliases")

@@ -39,7 +39,7 @@ def test_digest_creates_new(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
 
     mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text=json.dumps({
+    mock_resp.content = [MagicMock(type='text', text=json.dumps({
         "summary": "今日火锅和奶茶最火",
         "top_foods": ["火锅", "奶茶", "螺蛳粉"],
         "recommendation": "天冷来份火锅",
@@ -72,7 +72,7 @@ def test_digest_upserts_same_day(db_with_trends):
     db_with_trends.commit()
 
     mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text=json.dumps({
+    mock_resp.content = [MagicMock(type='text', text=json.dumps({
         "summary": "新摘要",
         "top_foods": ["火锅"],
         "recommendation": "新推荐",
@@ -108,7 +108,7 @@ def test_digest_handles_json_parse_error(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
 
     mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text="not valid json")]
+    mock_resp.content = [MagicMock(type='text', text="not valid json")]
 
     with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:
@@ -129,7 +129,7 @@ def test_digest_handles_markdown_code_block(db_with_trends):
         "recommendation": "推荐",
     })
     mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text=f"```json\n{json_body}\n```")]
+    mock_resp.content = [MagicMock(type='text', text=f"```json\n{json_body}\n```")]
 
     with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:

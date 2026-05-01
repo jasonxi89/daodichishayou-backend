@@ -205,7 +205,7 @@ async def recommend_by_ingredients(
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
 
-    raw_text = message.content[0].text.strip()
+    raw_text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), "").strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
@@ -294,7 +294,7 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
 
-    raw_text = message.content[0].text.strip()
+    raw_text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), "").strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
@@ -402,7 +402,7 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
 
-    raw_text = message.content[0].text.strip()
+    raw_text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), "").strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):

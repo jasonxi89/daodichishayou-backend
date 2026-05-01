@@ -145,7 +145,7 @@ def _make_mock_db_session():
 def test_extract_deduplicates_titles(mock_ai_enabled):
     from app.crawler.ai_extractor import extract_foods_from_titles
     mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text=json.dumps({
+    mock_resp.content = [MagicMock(type='text', text=json.dumps({
         "results": [
             {"title": "t1", "foods": [{"name": "酱香拿铁", "category": "饮品",
                                        "canonical_of": "拿铁", "trend_type": "event",

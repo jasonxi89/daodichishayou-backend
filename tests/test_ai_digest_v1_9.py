@@ -37,7 +37,7 @@ def test_digest_prompt_includes_trend_type_and_context(db):
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
         mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text='{"summary":"s","top_foods":["围炉煮茶"],"recommendation":"喝茶"}')]
+        mock_resp.content = [MagicMock(type='text', text='{"summary":"s","top_foods":["围炉煮茶"],"recommendation":"喝茶"}')]
         mock_client.messages.create.return_value = mock_resp
 
         generate_daily_digest(db)
@@ -62,7 +62,7 @@ def test_digest_system_prompt_explains_trend_types(db):
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
         mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text='{"summary":"s","top_foods":[],"recommendation":""}')]
+        mock_resp.content = [MagicMock(type='text', text='{"summary":"s","top_foods":[],"recommendation":""}')]
         mock_client.messages.create.return_value = mock_resp
 
         generate_daily_digest(db)

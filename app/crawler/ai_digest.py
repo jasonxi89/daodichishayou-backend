@@ -82,7 +82,7 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
         logger.error("AI 趋势总结调用失败", exc_info=True)
         return None
 
-    raw_text = resp.content[0].text.strip()
+    raw_text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
     if raw_text.startswith("```"):
         lines = raw_text.split("\n")
         lines = lines[1:]

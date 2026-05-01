@@ -8,8 +8,7 @@ import pytest
 def make_claude_response(dishes_json: str):
     """Create a mock Claude API response."""
     mock_message = MagicMock()
-    mock_message.content = [MagicMock()]
-    mock_message.content[0].text = dishes_json
+    mock_message.content = [MagicMock(type='text', text=dishes_json)]
     return mock_message
 
 

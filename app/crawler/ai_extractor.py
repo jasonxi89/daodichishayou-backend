@@ -193,7 +193,7 @@ def _extract_batch(
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    return _parse_response(resp.content[0].text, titles)
+    return _parse_response(next((b.text for b in resp.content if getattr(b, "type", None) == "text"), ""), titles)
 
 
 def _parse_response(

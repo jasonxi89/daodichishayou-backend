@@ -110,7 +110,7 @@ def _call_merge(client: Anthropic, batch: list[str]) -> list[dict]:
         system=_MERGE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
-    raw = resp.content[0].text.strip()
+    raw = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
     if raw.startswith("```"):
         lines = raw.split("\n")[1:]
         if lines and lines[-1].strip() == "```":
