@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, CLAUDE_API_KEY, CLAUDE_MODEL
+from app.config import AI_CORE_RULES, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
 from app.database import get_db
 from app.models import FoodAlias, FoodTrend
 
@@ -37,8 +37,8 @@ _MERGE_SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 @router.post("/merge-aliases")
 def merge_aliases(db: Session = Depends(get_db)) -> dict:
     """扫描 food_trends 里所有 food_name，用 AI 生成 alias → canonical 映射。"""
-    if not CLAUDE_API_KEY:
-        raise HTTPException(status_code=503, detail="CLAUDE_API_KEY 未配置")
+    if not DEEPSEEK_API_KEY:
+        raise HTTPException(status_code=503, detail="DEEPSEEK_API_KEY 未配置")
 
     names = sorted({
         row for row in db.execute(
@@ -49,7 +49,7 @@ def merge_aliases(db: Session = Depends(get_db)) -> dict:
     if not names:
         return {"status": "ok", "groups_processed": 0, "aliases_created": 0}
 
-    client = Anthropic(api_key=CLAUDE_API_KEY)
+    client = Anthropic(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     groups_processed = 0
     aliases_created = 0
 
@@ -105,7 +105,7 @@ def _call_merge(client: Anthropic, batch: list[str]) -> list[dict]:
         f"- {n}" for n in batch
     )
     resp = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=DEEPSEEK_MODEL,
         max_tokens=2000,
         system=_MERGE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],

@@ -9,7 +9,7 @@ from anthropic import Anthropic
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, CLAUDE_API_KEY, CLAUDE_MODEL, AI_EXTRACT_ENABLED
+from app.config import AI_CORE_RULES, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL, AI_EXTRACT_ENABLED
 from app.crawler.base import FoodTrendItem  # noqa: F401  crawlers still use this
 from app.database import SessionLocal
 from app.models import AITitleCache
@@ -117,8 +117,8 @@ def extract_foods_from_titles(titles: list[str]) -> list[ExtractedFoodItem]:
         logger.info("AI 提取已禁用")
         return []
 
-    if not CLAUDE_API_KEY:
-        logger.warning("未配置 CLAUDE_API_KEY，跳过 AI 提取")
+    if not DEEPSEEK_API_KEY:
+        logger.warning("未配置 DEEPSEEK_API_KEY，跳过 AI 提取")
         return []
 
     if not titles:
@@ -173,7 +173,7 @@ def _extract_batch(
     titles: list[str],
 ) -> tuple[list[ExtractedFoodItem], dict[str, list[dict]]]:
     """对一批标题调用 Claude 提取食物，返回 (items, {title: [food_dicts]})。"""
-    client = Anthropic(api_key=CLAUDE_API_KEY)
+    client = Anthropic(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
     titles_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
     user_prompt = f"""请对以下热搜标题提取食物 + 归因。
@@ -187,7 +187,7 @@ def _extract_batch(
 如果某个标题没有食物，其 foods 为空数组。"""
 
     resp = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=DEEPSEEK_MODEL,
         max_tokens=2000,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
