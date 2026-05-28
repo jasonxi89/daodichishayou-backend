@@ -14,8 +14,8 @@ def test_crawl_interval_default():
 
 
 def test_claude_api_key_from_env(monkeypatch):
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-123")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
     import importlib
     import app.config as cfg
     importlib.reload(cfg)
-    assert cfg.DEEPSEEK_API_KEY == "test-key-123"
+    assert cfg.ANTHROPIC_API_KEY == "test-key-123"

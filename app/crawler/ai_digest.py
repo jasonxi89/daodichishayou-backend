@@ -8,7 +8,7 @@ from anthropic import Anthropic
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
+from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 from app.models import FoodDigest, FoodTrend
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,8 @@ _SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 
 def generate_daily_digest(db: Session) -> FoodDigest | None:
     """基于当前热度数据生成今日美食趋势快报。"""
-    if not DEEPSEEK_API_KEY:
-        logger.warning("未配置 DEEPSEEK_API_KEY，跳过趋势总结")
+    if not ANTHROPIC_API_KEY:
+        logger.warning("未配置 ANTHROPIC_API_KEY，跳过趋势总结")
         return None
 
     # 查询当前热度 Top 30
@@ -67,10 +67,10 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
         )
     data_text = "\n".join(data_lines)
 
-    client = Anthropic(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
     try:
         resp = client.messages.create(
-            model=DEEPSEEK_MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=1000,
             system=_SYSTEM_PROMPT,
             messages=[{

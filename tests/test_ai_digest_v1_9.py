@@ -32,7 +32,7 @@ def test_digest_prompt_includes_trend_type_and_context(db):
     ))
     db.commit()
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "fake-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "fake-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_anth:
         mock_client = MagicMock()
         mock_anth.return_value = mock_client
@@ -57,7 +57,7 @@ def test_digest_system_prompt_explains_trend_types(db):
     ))
     db.commit()
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "fake-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "fake-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_anth:
         mock_client = MagicMock()
         mock_anth.return_value = mock_client

@@ -23,14 +23,14 @@ def db_with_trends(db):
 
 def test_digest_skips_without_api_key(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", ""):
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", ""):
         result = generate_daily_digest(db_with_trends)
     assert result is None
 
 
 def test_digest_skips_empty_data(db):
     from app.crawler.ai_digest import generate_daily_digest
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"):
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"):
         result = generate_daily_digest(db)
     assert result is None
 
@@ -45,7 +45,7 @@ def test_digest_creates_new(db_with_trends):
         "recommendation": "天冷来份火锅",
     }))]
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -78,7 +78,7 @@ def test_digest_upserts_same_day(db_with_trends):
         "recommendation": "新推荐",
     }))]
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -94,7 +94,7 @@ def test_digest_upserts_same_day(db_with_trends):
 def test_digest_handles_api_error(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -110,7 +110,7 @@ def test_digest_handles_json_parse_error(db_with_trends):
     mock_resp = MagicMock()
     mock_resp.content = [MagicMock(type='text', text="not valid json")]
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
@@ -131,7 +131,7 @@ def test_digest_handles_markdown_code_block(db_with_trends):
     mock_resp = MagicMock()
     mock_resp.content = [MagicMock(type='text', text=f"```json\n{json_body}\n```")]
 
-    with patch("app.crawler.ai_digest.DEEPSEEK_API_KEY", "test-key"), \
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
          patch("app.crawler.ai_digest.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client

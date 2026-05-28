@@ -4,7 +4,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
-APP_VERSION = "1.10.1"
+APP_VERSION = "1.11.0"
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'food_trends.db'}")
 API_PORT = int(os.getenv("API_PORT", "8900"))
@@ -17,9 +17,8 @@ CRAWL_SCHEDULE_HOURS = os.getenv(
 CRAWL_USE_SMART_SCHEDULE = os.getenv(
     "CRAWL_USE_SMART_SCHEDULE", "true"
 ).lower() == "true"
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-7")
 AI_EXTRACT_ENABLED = os.getenv("AI_EXTRACT_ENABLED", "true").lower() == "true"
 RECIPE_SCRAPE_INTERVAL_DAYS = int(os.getenv("RECIPE_SCRAPE_INTERVAL_DAYS", "7"))
 

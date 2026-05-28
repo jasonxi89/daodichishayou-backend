@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
+from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 from app.database import get_db
 from app.models import FoodsCategoryCache, Recipe
 from app.schemas import (
@@ -156,8 +156,8 @@ async def recommend_by_ingredients(
     req: IngredientRecommendRequest,
     db: Session = Depends(get_db),
 ):
-    if not DEEPSEEK_API_KEY:
-        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
     if not req.ingredients:
         raise HTTPException(status_code=400, detail="At least one ingredient is required")
@@ -183,12 +183,12 @@ async def recommend_by_ingredients(
     ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
     ai_exclude.extend(d.name for d in local_dishes)
 
-    client = anthropic.Anthropic(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     try:
         system_prompt = SYSTEM_PROMPT_EXTRA if req.allow_extra else SYSTEM_PROMPT
         message = client.messages.create(
-            model=DEEPSEEK_MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=4096,
             system=system_prompt,
             messages=[
@@ -256,8 +256,8 @@ CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 
 @router.post("/foods-by-category", response_model=GenerateFoodsResponse)
 async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get_db)):
-    if not DEEPSEEK_API_KEY:
-        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
     # Check cache first
     cached = (
@@ -276,11 +276,11 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
 
     count = max(1, min(req.count, 50))
 
-    client = anthropic.Anthropic(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     try:
         message = client.messages.create(
-            model=DEEPSEEK_MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=4096,
             system=CATEGORY_FOODS_PROMPT,
             messages=[
@@ -353,8 +353,8 @@ BULK_CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 
 @router.post("/bulk-foods-by-category", response_model=BulkGenerateFoodsResponse)
 async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = Depends(get_db)):
-    if not DEEPSEEK_API_KEY:
-        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not configured")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
     if not req.categories:
         return BulkGenerateFoodsResponse(results={})
@@ -383,12 +383,12 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
         return BulkGenerateFoodsResponse(results=cached_results)
 
     # Call Claude once for all uncached categories
-    client = anthropic.Anthropic(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     categories_text = "、".join(f"「{c}」" for c in uncached_categories)
     try:
         message = client.messages.create(
-            model=DEEPSEEK_MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=8192,
             system=BULK_CATEGORY_FOODS_PROMPT,
             messages=[
