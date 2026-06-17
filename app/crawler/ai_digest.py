@@ -4,11 +4,11 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
-from anthropic import Anthropic
+from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
 from app.models import FoodDigest, FoodTrend
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,8 @@ _SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 
 def generate_daily_digest(db: Session) -> FoodDigest | None:
     """基于当前热度数据生成今日美食趋势快报。"""
-    if not ANTHROPIC_API_KEY:
-        logger.warning("未配置 ANTHROPIC_API_KEY，跳过趋势总结")
+    if not OPENROUTER_API_KEY:
+        logger.warning("未配置 OPENROUTER_API_KEY，跳过趋势总结")
         return None
 
     # 查询当前热度 Top 30
@@ -67,22 +67,24 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
         )
     data_text = "\n".join(data_lines)
 
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
     try:
-        resp = client.messages.create(
-            model=ANTHROPIC_MODEL,
+        resp = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
             max_tokens=1000,
-            system=_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": f"以下是今日各平台美食热度数据：\n\n{data_text}\n\n请生成今日美食趋势快报。",
-            }],
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"以下是今日各平台美食热度数据：\n\n{data_text}\n\n请生成今日美食趋势快报。",
+                },
+            ],
         )
     except Exception:
         logger.error("AI 趋势总结调用失败", exc_info=True)
         return None
 
-    raw_text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
+    raw_text = (resp.choices[0].message.content or "").strip()
     if raw_text.startswith("```"):
         lines = raw_text.split("\n")
         lines = lines[1:]

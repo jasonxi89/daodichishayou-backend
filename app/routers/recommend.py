@@ -2,12 +2,13 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-import anthropic
+import openai
+from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
 from app.database import get_db
 from app.models import FoodsCategoryCache, Recipe
 from app.schemas import (
@@ -156,8 +157,8 @@ async def recommend_by_ingredients(
     req: IngredientRecommendRequest,
     db: Session = Depends(get_db),
 ):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
 
     if not req.ingredients:
         raise HTTPException(status_code=400, detail="At least one ingredient is required")
@@ -183,29 +184,29 @@ async def recommend_by_ingredients(
     ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
     ai_exclude.extend(d.name for d in local_dishes)
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
 
     try:
         system_prompt = SYSTEM_PROMPT_EXTRA if req.allow_extra else SYSTEM_PROMPT
-        message = client.messages.create(
-            model=ANTHROPIC_MODEL,
+        message = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
             max_tokens=4096,
-            system=system_prompt,
             messages=[
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": build_user_prompt(
                         req.ingredients, ai_count, req.preferences,
                         req.allow_extra, ai_exclude or None,
                     ),
-                }
+                },
             ],
         )
-    except anthropic.APIError as e:
+    except openai.OpenAIError as e:
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
 
-    raw_text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), "").strip()
+    raw_text = (message.choices[0].message.content or "").strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
@@ -256,8 +257,8 @@ CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 
 @router.post("/foods-by-category", response_model=GenerateFoodsResponse)
 async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get_db)):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
 
     # Check cache first
     cached = (
@@ -276,25 +277,25 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
 
     count = max(1, min(req.count, 50))
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
 
     try:
-        message = client.messages.create(
-            model=ANTHROPIC_MODEL,
+        message = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
             max_tokens=4096,
-            system=CATEGORY_FOODS_PROMPT,
             messages=[
+                {"role": "system", "content": CATEGORY_FOODS_PROMPT},
                 {
                     "role": "user",
                     "content": f"请列出{count}个属于「{req.category}」分类的食物名称。",
-                }
+                },
             ],
         )
-    except anthropic.APIError as e:
+    except openai.OpenAIError as e:
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
 
-    raw_text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), "").strip()
+    raw_text = (message.choices[0].message.content or "").strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
@@ -353,8 +354,8 @@ BULK_CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 
 @router.post("/bulk-foods-by-category", response_model=BulkGenerateFoodsResponse)
 async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = Depends(get_db)):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
 
     if not req.categories:
         return BulkGenerateFoodsResponse(results={})
@@ -382,27 +383,27 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
     if not uncached_categories:
         return BulkGenerateFoodsResponse(results=cached_results)
 
-    # Call Claude once for all uncached categories
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    # Call OpenAI-compatible API once for all uncached categories
+    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
 
     categories_text = "、".join(f"「{c}」" for c in uncached_categories)
     try:
-        message = client.messages.create(
-            model=ANTHROPIC_MODEL,
+        message = client.chat.completions.create(
+            model=OPENROUTER_MODEL,
             max_tokens=8192,
-            system=BULK_CATEGORY_FOODS_PROMPT,
             messages=[
+                {"role": "system", "content": BULK_CATEGORY_FOODS_PROMPT},
                 {
                     "role": "user",
                     "content": f"请为以下分类各列出{count}个食物名称：{categories_text}",
-                }
+                },
             ],
         )
-    except anthropic.APIError as e:
+    except openai.OpenAIError as e:
         logger.error("Claude API error: %s", e)
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
 
-    raw_text = next((b.text for b in message.content if getattr(b, "type", None) == "text"), "").strip()
+    raw_text = (message.choices[0].message.content or "").strip()
 
     # Strip markdown code fences if present
     if raw_text.startswith("```"):

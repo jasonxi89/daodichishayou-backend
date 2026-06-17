@@ -13,9 +13,9 @@ def test_crawl_interval_default():
     assert CRAWL_INTERVAL_HOURS == 6
 
 
-def test_claude_api_key_from_env(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
+def test_openrouter_api_key_from_env(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
     import importlib
     import app.config as cfg
     importlib.reload(cfg)
-    assert cfg.ANTHROPIC_API_KEY == "test-key-123"
+    assert cfg.OPENROUTER_API_KEY == "test-key-123"
