@@ -106,5 +106,5 @@ def test_extract_foods_returns_empty_when_ai_disabled():
 
 def test_extract_foods_returns_empty_when_no_api_key():
     with patch("app.crawler.ai_extractor.AI_EXTRACT_ENABLED", True), \
-         patch("app.crawler.ai_extractor.ANTHROPIC_API_KEY", ""):
+         patch("app.crawler.ai_extractor.OPENROUTER_API_KEY", ""):
         assert extract_foods_from_titles(["任意标题"]) == []

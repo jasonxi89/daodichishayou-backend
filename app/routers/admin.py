@@ -4,12 +4,13 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from anthropic import Anthropic
+import openai
+from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
 from app.database import get_db
 from app.models import FoodAlias, FoodTrend
 
@@ -37,8 +38,8 @@ _MERGE_SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 @router.post("/merge-aliases")
 def merge_aliases(db: Session = Depends(get_db)) -> dict:
     """扫描 food_trends 里所有 food_name，用 AI 生成 alias → canonical 映射。"""
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY 未配置")
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(status_code=503, detail="OPENROUTER_API_KEY 未配置")
 
     names = sorted({
         row for row in db.execute(
@@ -49,7 +50,7 @@ def merge_aliases(db: Session = Depends(get_db)) -> dict:
     if not names:
         return {"status": "ok", "groups_processed": 0, "aliases_created": 0}
 
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
     groups_processed = 0
     aliases_created = 0
 
@@ -100,17 +101,19 @@ def merge_aliases(db: Session = Depends(get_db)) -> dict:
     }
 
 
-def _call_merge(client: Anthropic, batch: list[str]) -> list[dict]:
+def _call_merge(client: OpenAI, batch: list[str]) -> list[dict]:
     user_prompt = "请归并以下食物名（找出同义/变体）：\n" + "\n".join(
         f"- {n}" for n in batch
     )
-    resp = client.messages.create(
-        model=ANTHROPIC_MODEL,
+    resp = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
         max_tokens=2000,
-        system=_MERGE_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
+        messages=[
+            {"role": "system", "content": _MERGE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
     )
-    raw = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "").strip()
+    raw = (resp.choices[0].message.content or "").strip()
     if raw.startswith("```"):
         lines = raw.split("\n")[1:]
         if lines and lines[-1].strip() == "```":
