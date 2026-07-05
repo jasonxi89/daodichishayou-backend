@@ -62,6 +62,13 @@ def _get_trending_raw(
     return TrendingResponse(total=total, items=items)
 
 
+def _aggregate_group_key():
+    """聚合分组键：canonical_name 为空(NULL/空串)时回退 food_name。"""
+    return func.coalesce(
+        func.nullif(FoodTrend.canonical_name, ""), FoodTrend.food_name
+    )
+
+
 def _get_trending_aggregated(
     db: Session,
     limit: int,
@@ -69,46 +76,73 @@ def _get_trending_aggregated(
     source: str | None,
     category: str | None,
 ) -> TrendingResponse:
-    stmt = select(FoodTrend)
+    """SQL 层聚合：group by 规范名，按组内最高热度排序后在 SQL 层分页。
+
+    排序语义与旧内存实现一致：max(heat_score) 降序，
+    平分时按组首次出现顺序（即组内最小 id）升序。
+    """
+    group_key = _aggregate_group_key()
+    max_heat = func.max(FoodTrend.heat_score).label("max_heat")
+    first_id = func.min(FoodTrend.id).label("first_id")
+
+    agg_stmt = select(group_key.label("canonical"), max_heat, first_id).group_by(
+        group_key
+    )
     if source:
-        stmt = stmt.where(FoodTrend.source == source)
+        agg_stmt = agg_stmt.where(FoodTrend.source == source)
     if category:
-        stmt = stmt.where(FoodTrend.category == category)
+        agg_stmt = agg_stmt.where(FoodTrend.category == category)
 
-    all_rows = db.execute(stmt).scalars().all()
+    total = db.execute(
+        select(func.count()).select_from(agg_stmt.subquery())
+    ).scalar() or 0
 
-    groups: dict[str, list[FoodTrend]] = {}
-    for row in all_rows:
-        key = row.canonical_name or row.food_name
-        groups.setdefault(key, []).append(row)
+    page_keys = [
+        row.canonical
+        for row in db.execute(
+            agg_stmt.order_by(max_heat.desc(), first_id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ]
+    if not page_keys:
+        return TrendingResponse(total=total, items=[])
 
-    aggregated: list[FoodTrendOut] = []
-    for canonical, rows in groups.items():
-        top = max(rows, key=lambda r: r.heat_score)
-        aliases = sorted({r.food_name for r in rows})
-        sources = sorted({r.source for r in rows})
-        trend_type = next((r.trend_type for r in rows if r.trend_type), None)
-        trend_context = next((r.trend_context for r in rows if r.trend_context), None)
-        aggregated.append(FoodTrendOut(
-            id=top.id,
-            food_name=top.food_name,
-            source=top.source,
-            heat_score=top.heat_score,
-            post_count=sum(r.post_count for r in rows),
-            category=top.category,
-            image_url=top.image_url,
-            updated_at=top.updated_at,
-            canonical_name=canonical,
-            aliases=aliases,
-            sources=sources,
-            trend_type=trend_type,
-            trend_context=trend_context,
-        ))
+    # 补充查询：只取当前页各组的明细行，用于别名/来源/代表行等展示字段
+    detail_stmt = (
+        select(FoodTrend).where(group_key.in_(page_keys)).order_by(FoodTrend.id)
+    )
+    if source:
+        detail_stmt = detail_stmt.where(FoodTrend.source == source)
+    if category:
+        detail_stmt = detail_stmt.where(FoodTrend.category == category)
 
-    aggregated.sort(key=lambda x: x.heat_score, reverse=True)
-    total = len(aggregated)
-    page = aggregated[offset: offset + limit]
-    return TrendingResponse(total=total, items=page)
+    groups: dict[str, list[FoodTrend]] = {key: [] for key in page_keys}
+    for row in db.execute(detail_stmt).scalars():
+        groups[row.canonical_name or row.food_name].append(row)
+
+    items = [_build_aggregated_item(key, groups[key]) for key in page_keys]
+    return TrendingResponse(total=total, items=items)
+
+
+def _build_aggregated_item(canonical: str, rows: list[FoodTrend]) -> FoodTrendOut:
+    """把同一规范名的明细行合成一条聚合结果（代表行取组内最高热度）。"""
+    top = max(rows, key=lambda r: r.heat_score)
+    return FoodTrendOut(
+        id=top.id,
+        food_name=top.food_name,
+        source=top.source,
+        heat_score=top.heat_score,
+        post_count=sum(r.post_count for r in rows),
+        category=top.category,
+        image_url=top.image_url,
+        updated_at=top.updated_at,
+        canonical_name=canonical,
+        aliases=sorted({r.food_name for r in rows}),
+        sources=sorted({r.source for r in rows}),
+        trend_type=next((r.trend_type for r in rows if r.trend_type), None),
+        trend_context=next((r.trend_context for r in rows if r.trend_context), None),
+    )
 
 
 @router.get("/categories", response_model=list[str])
