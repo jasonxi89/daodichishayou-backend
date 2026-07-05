@@ -59,6 +59,27 @@ def test_get_trending_filter_category(client, sample_trends):
         assert item["category"] == "正餐"
 
 
+def test_get_trending_aggregate_filter_source_returns_grouped_items(client, sample_trends):
+    # aggregate 默认开启: toutiao 有 火锅(90) 和 奶茶(87) 两组
+    resp = client.get("/api/trending?source=toutiao")
+    data = resp.json()
+    assert data["total"] == 2
+    names = [item["food_name"] for item in data["items"]]
+    assert names == ["火锅", "奶茶"]
+
+
+def test_get_trending_aggregate_filter_category_merges_sources(client, sample_trends):
+    # aggregate 默认开启: 正餐 只有 火锅 一组 (toutiao 90 + baidu_suggest 88)
+    resp = client.get("/api/trending?category=正餐")
+    data = resp.json()
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert item["food_name"] == "火锅"
+    assert item["heat_score"] == 90
+    assert set(item["sources"]) == {"toutiao", "baidu_suggest"}
+    assert item["post_count"] == 80000 + 75000
+
+
 def test_get_trending_filter_nonexistent(client, sample_trends):
     resp = client.get("/api/trending?source=nonexistent")
     data = resp.json()
