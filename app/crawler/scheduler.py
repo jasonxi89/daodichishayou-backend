@@ -230,26 +230,6 @@ def _save_daily_snapshot(db: Session) -> None:
     logger.info("今日热度快照已保存: %s, %d 条", today, len(all_trends))
 
 
-def _save_ai_discoveries(db: Session, items: list[FoodTrendItem]) -> None:
-    """记录 AI 发现的新食物到 ai_discovered_foods 表。"""
-    for item in items:
-        existing = db.execute(
-            select(AIDiscoveredFood).where(
-                AIDiscoveredFood.food_name == item.food_name
-            )
-        ).scalar_one_or_none()
-        if existing:
-            existing.discovery_count += 1
-        else:
-            db.add(
-                AIDiscoveredFood(
-                    food_name=item.food_name,
-                    category=item.category,
-                )
-            )
-    db.commit()
-
-
 def _save_extracted_items(db: Session, items: list[ExtractedFoodItem]) -> int:
     """把 AI 提取的 ExtractedFoodItem 写入 food_trends (source='ai_extract')。
 

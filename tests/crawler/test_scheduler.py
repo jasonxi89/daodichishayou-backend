@@ -250,26 +250,6 @@ def test_run_all_crawlers_no_ai_when_no_unmatched(db):
     assert all(r.source != "ai_extract" for r in results)
 
 
-def test_save_ai_discoveries(db):
-    """AI discovered foods are saved to ai_discovered_foods table."""
-    from app.crawler.scheduler import _save_ai_discoveries
-    from app.crawler.base import FoodTrendItem
-    from app.models import AIDiscoveredFood
-    from sqlalchemy import select
-
-    items = [
-        FoodTrendItem("酱香拿铁", heat_score=50, category="饮品"),
-        FoodTrendItem("脏脏包", heat_score=50, category="甜品"),
-    ]
-    _save_ai_discoveries(db, items)
-
-    discoveries = db.execute(select(AIDiscoveredFood)).scalars().all()
-    assert len(discoveries) == 2
-    names = {d.food_name for d in discoveries}
-    assert "酱香拿铁" in names
-    assert "脏脏包" in names
-
-
 def test_save_recipes_inserts_new(db):
     from app.crawler.scheduler import _save_recipes
     from app.crawler.recipe_base import RecipeItem
@@ -416,20 +396,3 @@ def test_scheduled_recipe_scrape_uses_session():
             scheduled_recipe_scrape()
             mock_run.assert_called_once_with(mock_db)
             mock_db.close.assert_called_once()
-
-
-def test_save_ai_discoveries_increments_count(db):
-    """Repeated discovery increments count."""
-    from app.crawler.scheduler import _save_ai_discoveries
-    from app.crawler.base import FoodTrendItem
-    from app.models import AIDiscoveredFood
-    from sqlalchemy import select
-
-    items = [FoodTrendItem("酱香拿铁", heat_score=50, category="饮品")]
-    _save_ai_discoveries(db, items)
-    _save_ai_discoveries(db, items)
-
-    disc = db.execute(
-        select(AIDiscoveredFood).where(AIDiscoveredFood.food_name == "酱香拿铁")
-    ).scalar_one()
-    assert disc.discovery_count == 2
