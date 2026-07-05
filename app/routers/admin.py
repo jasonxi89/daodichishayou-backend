@@ -10,7 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
+from app.config import (
+    AI_CORE_RULES,
+    LLM_TIMEOUT_SECONDS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+)
 from app.database import get_db
 from app.models import FoodAlias, FoodTrend
 
@@ -50,7 +56,11 @@ def merge_aliases(db: Session = Depends(get_db)) -> dict:
     if not names:
         return {"status": "ok", "groups_processed": 0, "aliases_created": 0}
 
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
     groups_processed = 0
     aliases_created = 0
 

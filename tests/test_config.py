@@ -19,3 +19,16 @@ def test_openrouter_api_key_from_env(monkeypatch):
     import app.config as cfg
     importlib.reload(cfg)
     assert cfg.OPENROUTER_API_KEY == "test-key-123"
+
+
+def test_llm_timeout_defaults_to_60_seconds():
+    from app.config import LLM_TIMEOUT_SECONDS
+    assert LLM_TIMEOUT_SECONDS == 60
+
+
+def test_llm_timeout_overridable_from_env(monkeypatch):
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "120")
+    import importlib
+    import app.config as cfg
+    importlib.reload(cfg)
+    assert cfg.LLM_TIMEOUT_SECONDS == 120

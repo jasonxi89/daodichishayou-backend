@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
+from app.config import (
+    AI_CORE_RULES,
+    LLM_TIMEOUT_SECONDS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+)
 from app.database import get_db
 from app.models import FoodsCategoryCache, Recipe
 from app.schemas import (
@@ -184,7 +190,11 @@ async def recommend_by_ingredients(
     ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
     ai_exclude.extend(d.name for d in local_dishes)
 
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
 
     try:
         system_prompt = SYSTEM_PROMPT_EXTRA if req.allow_extra else SYSTEM_PROMPT
@@ -277,7 +287,11 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
 
     count = max(1, min(req.count, 50))
 
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
 
     try:
         message = client.chat.completions.create(
@@ -384,7 +398,11 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
         return BulkGenerateFoodsResponse(results=cached_results)
 
     # Call OpenAI-compatible API once for all uncached categories
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
 
     categories_text = "、".join(f"「{c}」" for c in uncached_categories)
     try:

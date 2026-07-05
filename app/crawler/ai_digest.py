@@ -8,7 +8,13 @@ from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL
+from app.config import (
+    AI_CORE_RULES,
+    LLM_TIMEOUT_SECONDS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+)
 from app.models import FoodDigest, FoodTrend
 
 logger = logging.getLogger(__name__)
@@ -67,7 +73,11 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
         )
     data_text = "\n".join(data_lines)
 
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
     try:
         resp = client.chat.completions.create(
             model=OPENROUTER_MODEL,

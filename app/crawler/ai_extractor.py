@@ -9,7 +9,14 @@ from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import AI_CORE_RULES, OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_BASE_URL, AI_EXTRACT_ENABLED
+from app.config import (
+    AI_CORE_RULES,
+    AI_EXTRACT_ENABLED,
+    LLM_TIMEOUT_SECONDS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+)
 from app.crawler.base import FoodTrendItem  # noqa: F401  crawlers still use this
 from app.database import SessionLocal
 from app.models import AITitleCache
@@ -173,7 +180,11 @@ def _extract_batch(
     titles: list[str],
 ) -> tuple[list[ExtractedFoodItem], dict[str, list[dict]]]:
     """对一批标题调用 Claude 提取食物，返回 (items, {title: [food_dicts]})。"""
-    client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
 
     titles_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
     user_prompt = f"""请对以下热搜标题提取食物 + 归因。
