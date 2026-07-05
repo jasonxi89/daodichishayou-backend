@@ -102,6 +102,48 @@ def test_search_recipes_no_source_url(client, db):
         assert "source_url" not in item
 
 
+def test_search_by_name_returns_matching_recipes(client, db):
+    _add_recipes(db)
+    resp = client.get("/api/recipes/search?name=红烧肉")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["name"] == "红烧肉"
+
+
+def test_search_by_name_fuzzy_matches_sorted_by_rating(client, db):
+    _add_recipes(db)
+    resp = client.get("/api/recipes/search?name=蛋")
+    assert resp.status_code == 200
+    data = resp.json()
+    names = [item["name"] for item in data["items"]]
+    # 番茄炒蛋(8.9) > 鸡蛋羹(8.5) > 西红柿蛋汤(8.0)
+    assert names == ["番茄炒蛋", "鸡蛋羹", "西红柿蛋汤"]
+
+
+def test_search_by_name_no_match_returns_empty(client, db):
+    _add_recipes(db)
+    resp = client.get("/api/recipes/search?name=佛跳墙")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert data["items"] == []
+
+
+def test_search_by_name_respects_limit(client, db):
+    _add_recipes(db)
+    resp = client.get("/api/recipes/search?name=蛋&limit=2")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 2
+
+
+def test_search_without_name_and_ingredients_returns_422(client, db):
+    _add_recipes(db)
+    resp = client.get("/api/recipes/search")
+    assert resp.status_code == 422
+
+
 def test_list_recipes(client, db):
     _add_recipes(db)
     resp = client.get("/api/recipes?limit=10")

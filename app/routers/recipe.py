@@ -1,7 +1,7 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.crawler.scheduler import run_recipe_scrapers
@@ -16,10 +16,41 @@ router = APIRouter(prefix="/api/recipes", tags=["recipes"])
 
 @router.get("/search", response_model=RecipeSearchResponse)
 def search_recipes(
-    ingredients: str = Query(..., description="逗号分隔的食材列表"),
+    ingredients: str | None = Query(None, description="逗号分隔的食材列表"),
+    name: str | None = Query(None, description="菜名关键词（模糊匹配）"),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
+    """按菜名或食材搜索菜谱。给了 name 走名称模糊匹配，否则按食材匹配。"""
+    if name:
+        return _search_by_name(db, name, limit)
+    if ingredients is not None:
+        return _search_by_ingredients(db, ingredients, limit)
+    raise HTTPException(
+        status_code=422,
+        detail="搜索菜谱必须提供 name 或 ingredients 参数之一",
+    )
+
+
+def _search_by_name(db: Session, name: str, limit: int) -> RecipeSearchResponse:
+    """按菜名模糊匹配，按评分+做过数排序。"""
+    stmt = (
+        select(Recipe)
+        .where(Recipe.name.like(f"%{name}%"))
+        .order_by(
+            func.coalesce(Recipe.rating, 0).desc(),
+            Recipe.made_count.desc(),
+        )
+        .limit(limit)
+    )
+    recipes = db.execute(stmt).scalars().all()
+    items = [RecipeOut.model_validate(r) for r in recipes]
+    return RecipeSearchResponse(total=len(items), items=items)
+
+
+def _search_by_ingredients(
+    db: Session, ingredients: str, limit: int
+) -> RecipeSearchResponse:
     """按食材搜索菜谱，按匹配数+评分+做过数排序。"""
     ingredient_list = [
         ing.strip() for ing in ingredients.split(",") if ing.strip()
@@ -41,7 +72,6 @@ def search_recipes(
         Recipe.ingredients_text.like(f"%{ing}%")
         for ing in ingredient_list
     ]
-    from sqlalchemy import or_
     stmt = (
         select(Recipe, match_count.label("match_count"))
         .where(or_(*conditions))
