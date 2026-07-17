@@ -16,7 +16,7 @@
 
 ## 技术栈与结构
 - **栈**: FastAPI 0.115 + SQLAlchemy 2.0 + SQLite（WAL 模式）+ APScheduler + httpx + BeautifulSoup4；LLM 走 **OpenRouter**（`openai` SDK，非 anthropic）；Docker + GitHub Actions CI/CD
-- **LLM 网关**: `OpenAI(base_url="https://openrouter.ai/api/v1")`，默认模型 `deepseek/deepseek-v4-pro`；切模型只改 NAS compose 的 `OPENROUTER_MODEL` env 后 recreate；调用形态 `client.chat.completions.create(...)`，读 `resp.choices[0].message.content`
+- **LLM 网关**: openai SDK + env 决定渠道。**2026-07-17 起走 DeepSeek 官网直连**：`OPENROUTER_BASE_URL=https://api.deepseek.com`、`OPENROUTER_MODEL=deepseek-v4-flash`（官网模型名无 `deepseek/` 前缀；官网自动上下文缓存+免 OpenRouter 手续费）。切模型/渠道只改 NAS compose env 后 recreate；调用形态 `client.chat.completions.create(...)`，读 `resp.choices[0].message.content`。回滚 OpenRouter：compose 备份 `.bak.preds-direct`
 - **目录**:
   ```
   app/
@@ -63,7 +63,6 @@ docker compose up --build
 
 ## 进行中 / TODO
 - **⭐ 零等待体验改造 P1-P3 待执行**：完整实施计划在 `docs/plans/2026-07-17-zero-wait-ux.md`（自包含，任何 agent 可直接按 checkbox 执行；含爬虫修复/预生成矩阵/投机预取/模型竞速/两段式流式）。下面的 steps_json 问题已并入该计划 Task 1.1-1.3
-- **LLM 渠道切 DeepSeek 官网直连待 key**：方案已定（env-only：`OPENROUTER_BASE_URL=https://api.deepseek.com` + 官网 key + 模型名去 `deepseek/` 前缀），等用户在 platform.deepseek.com 开 key 并充值。官网较 OpenRouter 省 ~5.5% 手续费且自动上下文缓存
 - **本地菜谱库 `steps_json` 全空**（生产 656 条 recipes 步骤全 NULL）：下厨房 `xiachufang.py` 的 `_parse_detail_page` 步骤选择器过时（配料解析正常，仅步骤失效）→ `_search_local_recipes` 过滤 `steps_json IS NOT NULL` 永远匹配 0 → **recommend 每次都走 LLM（约 20-50s）**，本地秒回从未生效。修法见上述计划 Task 1.1-1.3。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
 - **README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）：以本 HANDOFF 为准，有空可同步更新 README。
