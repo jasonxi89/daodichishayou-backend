@@ -263,8 +263,11 @@ def test_recommend_local_hit(client, db, monkeypatch):
         mock_client.chat.completions.create.assert_not_called()
 
 
-def test_recommend_local_partial(client, db, monkeypatch):
-    """Local has 1 recipe, need 2 -> Claude called for remaining 1."""
+def test_recommend_local_partial_returns_local_only(client, db, monkeypatch):
+    """Local has 1 recipe, need 2 -> return the 1 local dish immediately, no LLM.
+
+    LLM 补齐差额实测要 44-110s，远超前端超时；本地有结果就直接返回。
+    """
     monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
@@ -273,20 +276,13 @@ def test_recommend_local_partial(client, db, monkeypatch):
     with patch("app.routers.recommend.OpenAI") as mock_openai:
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄", "鸡蛋"], "count": 2})
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data["dishes"]) == 2
-        # First dish from local, second from AI
+        assert len(data["dishes"]) == 1
         assert data["dishes"][0]["name"] == "番茄炒蛋"
-        mock_client.chat.completions.create.assert_called_once()
-        # AI asked for 1 dish, excluding the local one — user content is messages[1]
-        call_args = mock_client.chat.completions.create.call_args
-        user_content = call_args.kwargs["messages"][1]["content"]
-        assert "1道" in user_content
-        assert "番茄炒蛋" in user_content
+        mock_client.chat.completions.create.assert_not_called()
 
 
 def test_recommend_local_empty(client, db, monkeypatch):

@@ -179,7 +179,9 @@ async def recommend_by_ingredients(
         local_dishes = _search_local_recipes(
             db, req.ingredients, count, req.exclude_dishes or None,
         )
-        if len(local_dishes) >= count:
+        # 本地有结果就直接返回，宁缺毋滥：LLM 补齐差额实测 44-110s，
+        # 远超前端可接受的等待时间，得不偿失
+        if local_dishes:
             return IngredientRecommendResponse(
                 dishes=local_dishes[:count],
                 input_ingredients=req.ingredients,
