@@ -62,7 +62,9 @@ docker compose up --build
 - 诊断技巧：客户端超时断开的请求 uvicorn **不写 access log**（后端日志里会"隐形"，只留孤儿 httpx OpenRouter 行）。
 
 ## 进行中 / TODO
-- **本地菜谱库 `steps_json` 全空**（生产 656 条 recipes 步骤全 NULL）：下厨房 `xiachufang.py` 的 `_parse_detail_page` 步骤选择器过时（配料解析正常，仅步骤失效）→ `_search_local_recipes` 过滤 `steps_json IS NOT NULL` 永远匹配 0 → **recommend 每次都走 LLM（约 20-50s）**，本地秒回从未生效。修法：抓真实详情页找新选择器 → 修 parser → 重爬 656 条补步骤。
+- **⭐ 零等待体验改造 P1-P3 待执行**：完整实施计划在 `docs/plans/2026-07-17-zero-wait-ux.md`（自包含，任何 agent 可直接按 checkbox 执行；含爬虫修复/预生成矩阵/投机预取/模型竞速/两段式流式）。下面的 steps_json 问题已并入该计划 Task 1.1-1.3
+- **LLM 渠道切 DeepSeek 官网直连待 key**：方案已定（env-only：`OPENROUTER_BASE_URL=https://api.deepseek.com` + 官网 key + 模型名去 `deepseek/` 前缀），等用户在 platform.deepseek.com 开 key 并充值。官网较 OpenRouter 省 ~5.5% 手续费且自动上下文缓存
+- **本地菜谱库 `steps_json` 全空**（生产 656 条 recipes 步骤全 NULL）：下厨房 `xiachufang.py` 的 `_parse_detail_page` 步骤选择器过时（配料解析正常，仅步骤失效）→ `_search_local_recipes` 过滤 `steps_json IS NOT NULL` 永远匹配 0 → **recommend 每次都走 LLM（约 20-50s）**，本地秒回从未生效。修法见上述计划 Task 1.1-1.3。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
 - **README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）：以本 HANDOFF 为准，有空可同步更新 README。
 
