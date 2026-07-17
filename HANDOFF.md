@@ -16,7 +16,7 @@
 
 ## 技术栈与结构
 - **栈**: FastAPI 0.115 + SQLAlchemy 2.0 + SQLite（WAL 模式）+ APScheduler + httpx + BeautifulSoup4；LLM 走 **OpenRouter**（`openai` SDK，非 anthropic）；Docker + GitHub Actions CI/CD
-- **LLM 网关**: openai SDK + env 决定渠道。**2026-07-17 起走 DeepSeek 官网直连**：`OPENROUTER_BASE_URL=https://api.deepseek.com`、`OPENROUTER_MODEL=deepseek-v4-flash`（官网模型名无 `deepseek/` 前缀；官网自动上下文缓存+免 OpenRouter 手续费）。切模型/渠道只改 NAS compose env 后 recreate；调用形态 `client.chat.completions.create(...)`，读 `resp.choices[0].message.content`。回滚 OpenRouter：compose 备份 `.bak.preds-direct`
+- **LLM 网关**: openai SDK + env 决定渠道。**2026-07-17 起走 DeepSeek 官网直连**：`OPENROUTER_BASE_URL=https://api.deepseek.com`、`OPENROUTER_MODEL=deepseek-v4-pro`（试过 flash 因快报文风干瘪换回 pro；官网模型名无 `deepseek/` 前缀；官网直连 + 自动上下文缓存后 pro 实测 recommend ~14s，远快于 OpenRouter 时代的 44s）。切模型/渠道只改 NAS compose env 后 recreate；调用形态 `client.chat.completions.create(...)`，读 `resp.choices[0].message.content`。回滚 OpenRouter：compose 备份 `.bak.preds-direct`
 - **目录**:
   ```
   app/
