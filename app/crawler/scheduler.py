@@ -202,7 +202,10 @@ def run_all_crawlers(db: Session) -> list[CrawlResult]:
 
 def _save_daily_snapshot(db: Session) -> None:
     """保存当前热度数据为今日快照（同一天同食物同来源只保留最新）。"""
-    today = date.today()
+    # snapshot_date 是 DateTime 列：必须用 datetime 而非裸 date 做比较，
+    # 否则 SQLite 绑定成 '2026-07-17' 与存储值 '...00:00:00.000000' 永不相等，
+    # 存在性检查落空导致同日重复插入撞 UNIQUE（与 ai_digest.py 同一模式）
+    today = datetime.combine(date.today(), datetime.min.time())
     all_trends = db.execute(select(FoodTrend)).scalars().all()
 
     for trend in all_trends:

@@ -396,3 +396,40 @@ def test_scheduled_recipe_scrape_uses_session():
             scheduled_recipe_scrape()
             mock_run.assert_called_once_with(mock_db)
             mock_db.close.assert_called_once()
+
+
+def test_save_daily_snapshot_second_run_same_day_updates(db, sample_trends):
+    """同一天第二次运行必须更新已有快照，而不是重复插入撞 UNIQUE 崩溃。
+
+    回归测试：snapshot_date 为 DateTime 列，用裸 date 对象做 == 比较时
+    SQLite 绑定成 '2026-07-17'，与存储值 '2026-07-17 00:00:00.000000'
+    永远不相等 → 存在性检查全部落空 → 全量重插 → IntegrityError。
+    """
+    from sqlalchemy import select
+    from app.crawler.scheduler import _save_daily_snapshot
+    from app.models import FoodTrend, FoodTrendSnapshot
+
+    _save_daily_snapshot(db)
+    first_count = len(db.execute(select(FoodTrendSnapshot)).scalars().all())
+    assert first_count == len(sample_trends)
+
+    # 模拟第二次爬虫后热度变化
+    trend = db.execute(
+        select(FoodTrend).where(
+            FoodTrend.food_name == "火锅", FoodTrend.source == "toutiao"
+        )
+    ).scalar_one()
+    trend.heat_score = 99
+    db.commit()
+
+    _save_daily_snapshot(db)  # 修复前此处抛 IntegrityError
+
+    snapshots = db.execute(select(FoodTrendSnapshot)).scalars().all()
+    assert len(snapshots) == first_count  # 不重复插入
+    updated = db.execute(
+        select(FoodTrendSnapshot).where(
+            FoodTrendSnapshot.food_name == "火锅",
+            FoodTrendSnapshot.source == "toutiao",
+        )
+    ).scalar_one()
+    assert updated.heat_score == 99  # 同日保留最新热度
