@@ -9,9 +9,15 @@ from app.config import (
     CRAWL_INTERVAL_HOURS,
     CRAWL_SCHEDULE_HOURS,
     CRAWL_USE_SMART_SCHEDULE,
+    PREGEN_ENABLED,
     RECIPE_SCRAPE_INTERVAL_DAYS,
 )
-from app.crawler.scheduler import scheduled_crawl, scheduled_recipe_scrape, seed_data
+from app.crawler.scheduler import (
+    scheduled_crawl,
+    scheduled_pregeneration,
+    scheduled_recipe_scrape,
+    seed_data,
+)
 from app.database import Base, engine
 from app.routers import admin, trending, recommend, recipe
 from app.schemas import HealthResponse
@@ -71,6 +77,19 @@ async def lifespan(app: FastAPI):
         id="recipe_scrape",
         replace_existing=True,
     )
+    if PREGEN_ENABLED:
+        scheduler.add_job(
+            scheduled_pregeneration,
+            "cron",
+            hour=3,
+            minute=30,
+            timezone="Asia/Shanghai",
+            id="recommend_pregen",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
     scheduler.start()
     yield
     # Shutdown

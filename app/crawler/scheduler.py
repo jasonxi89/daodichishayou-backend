@@ -9,6 +9,7 @@ from app.crawler.ai_extractor import ExtractedFoodItem, extract_foods_from_title
 from app.crawler.base import BaseCrawler, FoodTrendItem
 from app.crawler.baidu_suggest import BaiduSuggestCrawler
 from app.crawler.dailyhot import DailyHotCrawler
+from app.crawler.pregen import run_pregeneration
 from app.crawler.recipe_base import RecipeItem
 from app.crawler.toutiao import ToutiaoCrawler
 from app.crawler.xiachufang import XiachufangScraper
@@ -492,5 +493,18 @@ def scheduled_crawl() -> None:
     db = SessionLocal()
     try:
         run_all_crawlers(db)
+    finally:
+        db.close()
+
+
+def scheduled_pregeneration() -> int:
+    """Run recommendation pre-generation without leaking errors to APScheduler."""
+    db = SessionLocal()
+    try:
+        return run_pregeneration(db)
+    except Exception:
+        db.rollback()
+        logger.exception("推荐预生成定时任务失败")
+        return 0
     finally:
         db.close()

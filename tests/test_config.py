@@ -32,3 +32,10 @@ def test_llm_timeout_overridable_from_env(monkeypatch):
     import app.config as cfg
     importlib.reload(cfg)
     assert cfg.LLM_TIMEOUT_SECONDS == 120
+
+
+def test_pregeneration_defaults():
+    from app.config import PREGEN_DAILY_BUDGET, PREGEN_ENABLED
+
+    assert PREGEN_ENABLED is True
+    assert PREGEN_DAILY_BUDGET == 120
