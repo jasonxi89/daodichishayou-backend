@@ -62,7 +62,7 @@ docker compose up --build
 - 诊断技巧：客户端超时断开的请求 uvicorn **不写 access log**（后端日志里会"隐形"，只留孤儿 httpx OpenRouter 行）。
 
 ## 进行中 / TODO
-- **⭐ 零等待体验改造 P1-P3 待执行**：完整实施计划在 `docs/plans/2026-07-17-zero-wait-ux.md`（自包含，任何 agent 可直接按 checkbox 执行；含爬虫修复/预生成矩阵/投机预取/模型竞速/两段式流式）。下面的 steps_json 问题已并入该计划 Task 1.1-1.3
+- **⭐ 零等待体验改造待执行（一次性完成版）**：完整实施计划在 `docs/plans/2026-07-17-zero-wait-ux.md`（2026-07-18 已重构为一口气改完、单次发版：后端 →1.14.0 / 前端 →1.8.0；Stage A 后端 → Stage B 前端 → Stage C 部署验证；自包含，任何 agent 可直接按 checkbox 执行；含爬虫修复/预生成矩阵/两段式 quick+steps/流式/投机预取/静默降级，模型竞速已降为可选）。下面的 steps_json 问题已并入该计划 Task A1-A3
 - **本地菜谱库 `steps_json` 全空**（生产 656 条 recipes 步骤全 NULL）：下厨房 `xiachufang.py` 的 `_parse_detail_page` 步骤选择器过时（配料解析正常，仅步骤失效）→ `_search_local_recipes` 过滤 `steps_json IS NOT NULL` 永远匹配 0 → **recommend 每次都走 LLM（约 20-50s）**，本地秒回从未生效。修法见上述计划 Task 1.1-1.3。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
 - **README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）：以本 HANDOFF 为准，有空可同步更新 README。
