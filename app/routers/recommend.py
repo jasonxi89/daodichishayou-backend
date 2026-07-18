@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 import openai
 from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import (
@@ -17,7 +16,7 @@ from app.config import (
     OPENROUTER_MODEL,
 )
 from app.database import get_db
-from app.models import FoodsCategoryCache, Recipe, RecommendCache
+from app.models import FoodsCategoryCache
 from app.schemas import (
     BulkGenerateFoodsRequest,
     BulkGenerateFoodsResponse,
@@ -27,11 +26,16 @@ from app.schemas import (
     IngredientRecommendResponse,
     RecommendedDish,
 )
+from app.services.recipe_search import search_local_recipes as _search_local_recipes
+from app.services.recommend_cache import (
+    get_cached_recommendation as _get_cached_recommendation,
+    make_cache_key,
+    store_recommendation as _store_recommendation,
+)
 
 logger = logging.getLogger(__name__)
 
 CATEGORY_CACHE_TTL = timedelta(days=1)
-RECOMMEND_CACHE_TTL = timedelta(days=7)
 
 router = APIRouter(prefix="/api", tags=["recommend"])
 
@@ -105,69 +109,6 @@ def build_user_prompt(
     return "\n".join(parts)
 
 
-def make_cache_key(ingredients: list[str], count: int) -> str:
-    """Return a stable key for an ingredient set and requested dish count."""
-    normalized = sorted(
-        "".join(ingredient.lower().split())
-        for ingredient in ingredients
-        if ingredient and ingredient.strip()
-    )
-    return f"{'|'.join(normalized)}#c{count}"
-
-
-def _get_cached_recommendation(
-    db: Session,
-    cache_key: str,
-    now: datetime,
-) -> IngredientRecommendResponse | None:
-    cached = (
-        db.query(RecommendCache)
-        .filter(
-            RecommendCache.cache_key == cache_key,
-            RecommendCache.expires_at > now,
-        )
-        .first()
-    )
-    if not cached:
-        return None
-
-    try:
-        return IngredientRecommendResponse.model_validate_json(cached.payload)
-    except ValueError:
-        logger.warning("Ignoring invalid recommend cache payload: %s", cache_key)
-        return None
-
-
-def _store_recommendation(
-    db: Session,
-    cache_key: str,
-    response: IngredientRecommendResponse,
-    now: datetime,
-) -> None:
-    payload = response.model_dump_json()
-    cached = (
-        db.query(RecommendCache)
-        .filter(RecommendCache.cache_key == cache_key)
-        .first()
-    )
-    if cached:
-        cached.payload = payload
-        cached.model = OPENROUTER_MODEL
-        cached.created_at = now
-        cached.expires_at = now + RECOMMEND_CACHE_TTL
-    else:
-        db.add(
-            RecommendCache(
-                cache_key=cache_key,
-                payload=payload,
-                model=OPENROUTER_MODEL,
-                created_at=now,
-                expires_at=now + RECOMMEND_CACHE_TTL,
-            )
-        )
-    db.commit()
-
-
 def _strip_code_fence(raw_text: str) -> str:
     """Remove an optional Markdown code fence from an LLM JSON response."""
     if not raw_text.startswith("```"):
@@ -225,61 +166,6 @@ def generate_dishes_via_llm(
         )
         for item in data.get("dishes", [])
     ]
-
-
-def _recipe_to_dish(recipe: Recipe) -> RecommendedDish:
-    """Convert a local Recipe row to a RecommendedDish."""
-    ingredients_data = json.loads(recipe.ingredients_json)
-    steps_data = json.loads(recipe.steps_json)
-    return RecommendedDish(
-        name=recipe.name,
-        summary="经典家常做法",
-        ingredients=[
-            f"{i['name']} {i.get('amount', '适量')}" for i in ingredients_data
-        ],
-        steps=[
-            s["text"] if isinstance(s, dict) else str(s) for s in steps_data
-        ],
-    )
-
-
-def _search_local_recipes(
-    db: Session,
-    ingredients: list[str],
-    count: int,
-    exclude_dishes: list[str] | None = None,
-) -> list[RecommendedDish]:
-    """Search local recipes table by ingredient matching."""
-    match_cases = [
-        func.iif(Recipe.ingredients_text.like(f"%{ing}%"), 1, 0)
-        for ing in ingredients
-    ]
-    match_count = sum(match_cases)
-
-    conditions = [
-        Recipe.ingredients_text.like(f"%{ing}%") for ing in ingredients
-    ]
-
-    stmt = (
-        select(Recipe, match_count.label("match_count"))
-        .where(
-            or_(*conditions),
-            Recipe.ingredients_text.isnot(None),
-            Recipe.steps_json.isnot(None),
-        )
-    )
-
-    if exclude_dishes:
-        stmt = stmt.where(Recipe.name.notin_(exclude_dishes))
-
-    stmt = stmt.order_by(
-        match_count.desc(),
-        func.coalesce(Recipe.rating, 0).desc(),
-        Recipe.made_count.desc(),
-    ).limit(count)
-
-    rows = db.execute(stmt).all()
-    return [_recipe_to_dish(row[0]) for row in rows]
 
 
 @router.post("/recommend", response_model=IngredientRecommendResponse)
@@ -358,7 +244,13 @@ async def recommend_by_ingredients(
         input_ingredients=req.ingredients,
     )
     if is_cache_eligible:
-        _store_recommendation(db, cache_key, response, now)
+        _store_recommendation(
+            db,
+            cache_key,
+            response,
+            OPENROUTER_MODEL,
+            now,
+        )
     return response
 
 
