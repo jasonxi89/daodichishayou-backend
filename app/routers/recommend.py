@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -167,6 +168,65 @@ def _store_recommendation(
     db.commit()
 
 
+def _strip_code_fence(raw_text: str) -> str:
+    """Remove an optional Markdown code fence from an LLM JSON response."""
+    if not raw_text.startswith("```"):
+        return raw_text
+    lines = raw_text.split("\n")[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
+def generate_dishes_via_llm(
+    ingredients: list[str],
+    count: int,
+    preferences: str | None,
+    allow_extra: bool = False,
+    exclude_dishes: list[str] | None = None,
+) -> list[RecommendedDish]:
+    """Synchronously generate complete dishes through the configured LLM."""
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    system_prompt = SYSTEM_PROMPT_EXTRA if allow_extra else SYSTEM_PROMPT
+    message = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    ingredients,
+                    count,
+                    preferences,
+                    allow_extra,
+                    exclude_dishes,
+                ),
+            },
+        ],
+    )
+    raw_text = _strip_code_fence(
+        (message.choices[0].message.content or "").strip()
+    )
+    data = json.loads(raw_text)
+    return [
+        RecommendedDish(
+            name=item.get("name", ""),
+            summary=item.get("summary", ""),
+            ingredients=item.get("ingredients", []),
+            steps=item.get("steps", []),
+            difficulty=item.get("difficulty"),
+            cook_time=item.get("cook_time"),
+            extra_ingredients=item.get("extra_ingredients"),
+        )
+        for item in data.get("dishes", [])
+    ]
+
+
 def _recipe_to_dish(recipe: Recipe) -> RecommendedDish:
     """Convert a local Recipe row to a RecommendedDish."""
     ingredients_data = json.loads(recipe.ingredients_json)
@@ -271,61 +331,27 @@ async def recommend_by_ingredients(
     ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
     ai_exclude.extend(d.name for d in local_dishes)
 
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-
     try:
-        system_prompt = SYSTEM_PROMPT_EXTRA if req.allow_extra else SYSTEM_PROMPT
-        message = client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            max_tokens=4096,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": build_user_prompt(
-                        req.ingredients, ai_count, req.preferences,
-                        req.allow_extra, ai_exclude or None,
-                    ),
-                },
-            ],
+        ai_dishes = await asyncio.to_thread(
+            generate_dishes_via_llm,
+            req.ingredients,
+            ai_count,
+            req.preferences,
+            req.allow_extra,
+            ai_exclude or None,
         )
     except openai.OpenAIError as e:
-        logger.error("Claude API error: %s", e)
-        raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
-
-    raw_text = (message.choices[0].message.content or "").strip()
-
-    # Strip markdown code fences if present
-    if raw_text.startswith("```"):
-        lines = raw_text.split("\n")
-        lines = lines[1:]  # remove opening ```json
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw_text = "\n".join(lines)
-
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        logger.error("Failed to parse Claude response: %s", raw_text[:500])
-        raise HTTPException(status_code=502, detail="AI response format error")
-
-    ai_dishes = []
-    for item in data.get("dishes", []):
-        ai_dishes.append(
-            RecommendedDish(
-                name=item.get("name", ""),
-                summary=item.get("summary", ""),
-                ingredients=item.get("ingredients", []),
-                steps=item.get("steps", []),
-                difficulty=item.get("difficulty"),
-                cook_time=item.get("cook_time"),
-                extra_ingredients=item.get("extra_ingredients"),
-            )
-        )
+        logger.error("LLM API error: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="AI service temporarily unavailable",
+        ) from e
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse LLM dish response")
+        raise HTTPException(
+            status_code=502,
+            detail="AI response format error",
+        ) from e
 
     response = IngredientRecommendResponse(
         dishes=local_dishes + ai_dishes,
@@ -347,6 +373,35 @@ CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 
 返回格式（纯JSON，无markdown）：
 {{{{"foods": ["食物1", "食物2", "食物3"]}}}}"""
+
+
+def generate_foods_by_category_via_llm(
+    category: str,
+    count: int,
+) -> list[str]:
+    """Synchronously generate food names for one category."""
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    message = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": CATEGORY_FOODS_PROMPT},
+            {
+                "role": "user",
+                "content": f"请列出{count}个属于「{category}」分类的食物名称。",
+            },
+        ],
+    )
+    raw_text = _strip_code_fence(
+        (message.choices[0].message.content or "").strip()
+    )
+    data = json.loads(raw_text)
+    foods = data.get("foods", [])
+    return foods if isinstance(foods, list) else []
 
 
 @router.post("/foods-by-category", response_model=GenerateFoodsResponse)
@@ -371,45 +426,24 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
 
     count = max(1, min(req.count, 50))
 
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-
     try:
-        message = client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            max_tokens=4096,
-            messages=[
-                {"role": "system", "content": CATEGORY_FOODS_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"请列出{count}个属于「{req.category}」分类的食物名称。",
-                },
-            ],
+        foods = await asyncio.to_thread(
+            generate_foods_by_category_via_llm,
+            req.category,
+            count,
         )
     except openai.OpenAIError as e:
-        logger.error("Claude API error: %s", e)
-        raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
-
-    raw_text = (message.choices[0].message.content or "").strip()
-
-    # Strip markdown code fences if present
-    if raw_text.startswith("```"):
-        lines = raw_text.split("\n")
-        lines = lines[1:]  # remove opening ```json
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw_text = "\n".join(lines)
-
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        logger.error("Failed to parse Claude response: %s", raw_text[:500])
-        raise HTTPException(status_code=502, detail="AI response format error")
-
-    foods = data.get("foods", [])
+        logger.error("LLM API error: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="AI service temporarily unavailable",
+        ) from e
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse LLM category response")
+        raise HTTPException(
+            status_code=502,
+            detail="AI response format error",
+        ) from e
 
     # Save to cache (upsert by category)
     existing = (
@@ -450,6 +484,35 @@ BULK_CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 {{{{"分类名1": ["食物1", "食物2"], "分类名2": ["食物3", "食物4"]}}}}"""
 
 
+def generate_bulk_foods_by_category_via_llm(
+    categories: list[str],
+    count: int,
+) -> dict[str, list[str]]:
+    """Synchronously generate food names for multiple categories."""
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    categories_text = "、".join(f"「{category}」" for category in categories)
+    message = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        max_tokens=8192,
+        messages=[
+            {"role": "system", "content": BULK_CATEGORY_FOODS_PROMPT},
+            {
+                "role": "user",
+                "content": f"请为以下分类各列出{count}个食物名称：{categories_text}",
+            },
+        ],
+    )
+    raw_text = _strip_code_fence(
+        (message.choices[0].message.content or "").strip()
+    )
+    data = json.loads(raw_text)
+    return data if isinstance(data, dict) else {}
+
+
 @router.post("/bulk-foods-by-category", response_model=BulkGenerateFoodsResponse)
 async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = Depends(get_db)):
     if not OPENROUTER_API_KEY:
@@ -481,45 +544,24 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
     if not uncached_categories:
         return BulkGenerateFoodsResponse(results=cached_results)
 
-    # Call OpenAI-compatible API once for all uncached categories
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-
-    categories_text = "、".join(f"「{c}」" for c in uncached_categories)
     try:
-        message = client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            max_tokens=8192,
-            messages=[
-                {"role": "system", "content": BULK_CATEGORY_FOODS_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"请为以下分类各列出{count}个食物名称：{categories_text}",
-                },
-            ],
+        data = await asyncio.to_thread(
+            generate_bulk_foods_by_category_via_llm,
+            uncached_categories,
+            count,
         )
     except openai.OpenAIError as e:
-        logger.error("Claude API error: %s", e)
-        raise HTTPException(status_code=502, detail="AI service temporarily unavailable")
-
-    raw_text = (message.choices[0].message.content or "").strip()
-
-    # Strip markdown code fences if present
-    if raw_text.startswith("```"):
-        lines = raw_text.split("\n")
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw_text = "\n".join(lines)
-
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        logger.error("Failed to parse Claude bulk response: %s", raw_text[:500])
-        raise HTTPException(status_code=502, detail="AI response format error")
+        logger.error("LLM API error: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="AI service temporarily unavailable",
+        ) from e
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse LLM bulk-category response")
+        raise HTTPException(
+            status_code=502,
+            detail="AI response format error",
+        ) from e
 
     # Upsert each category into cache
     for category in uncached_categories:
