@@ -147,6 +147,23 @@ class FoodsCategoryCache(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class RecommendCache(Base):
+    """食材组合与请求数量对应的完整推荐结果缓存。"""
+
+    __tablename__ = "recommend_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cache_key: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    payload: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+
+
 class FoodAlias(Base):
     """食物别名 → 规范名映射，支持同义归并。"""
     __tablename__ = "food_aliases"

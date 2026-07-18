@@ -16,7 +16,7 @@ from app.config import (
     OPENROUTER_MODEL,
 )
 from app.database import get_db
-from app.models import FoodsCategoryCache, Recipe
+from app.models import FoodsCategoryCache, Recipe, RecommendCache
 from app.schemas import (
     BulkGenerateFoodsRequest,
     BulkGenerateFoodsResponse,
@@ -30,6 +30,7 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 CATEGORY_CACHE_TTL = timedelta(days=1)
+RECOMMEND_CACHE_TTL = timedelta(days=7)
 
 router = APIRouter(prefix="/api", tags=["recommend"])
 
@@ -103,6 +104,69 @@ def build_user_prompt(
     return "\n".join(parts)
 
 
+def make_cache_key(ingredients: list[str], count: int) -> str:
+    """Return a stable key for an ingredient set and requested dish count."""
+    normalized = sorted(
+        "".join(ingredient.lower().split())
+        for ingredient in ingredients
+        if ingredient and ingredient.strip()
+    )
+    return f"{'|'.join(normalized)}#c{count}"
+
+
+def _get_cached_recommendation(
+    db: Session,
+    cache_key: str,
+    now: datetime,
+) -> IngredientRecommendResponse | None:
+    cached = (
+        db.query(RecommendCache)
+        .filter(
+            RecommendCache.cache_key == cache_key,
+            RecommendCache.expires_at > now,
+        )
+        .first()
+    )
+    if not cached:
+        return None
+
+    try:
+        return IngredientRecommendResponse.model_validate_json(cached.payload)
+    except ValueError:
+        logger.warning("Ignoring invalid recommend cache payload: %s", cache_key)
+        return None
+
+
+def _store_recommendation(
+    db: Session,
+    cache_key: str,
+    response: IngredientRecommendResponse,
+    now: datetime,
+) -> None:
+    payload = response.model_dump_json()
+    cached = (
+        db.query(RecommendCache)
+        .filter(RecommendCache.cache_key == cache_key)
+        .first()
+    )
+    if cached:
+        cached.payload = payload
+        cached.model = OPENROUTER_MODEL
+        cached.created_at = now
+        cached.expires_at = now + RECOMMEND_CACHE_TTL
+    else:
+        db.add(
+            RecommendCache(
+                cache_key=cache_key,
+                payload=payload,
+                model=OPENROUTER_MODEL,
+                created_at=now,
+                expires_at=now + RECOMMEND_CACHE_TTL,
+            )
+        )
+    db.commit()
+
+
 def _recipe_to_dish(recipe: Recipe) -> RecommendedDish:
     """Convert a local Recipe row to a RecommendedDish."""
     ingredients_data = json.loads(recipe.ingredients_json)
@@ -163,15 +227,27 @@ async def recommend_by_ingredients(
     req: IngredientRecommendRequest,
     db: Session = Depends(get_db),
 ):
-    if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
-
     if not req.ingredients:
         raise HTTPException(status_code=400, detail="At least one ingredient is required")
 
     count = max(1, min(req.count, 5))
+    now = datetime.now(timezone.utc)
 
-    # Local-first: skip when allow_extra or preferences are set
+    # Customized requests must not reuse a generic ingredient-only result.
+    is_cache_eligible = (
+        not req.allow_extra
+        and not req.preferences
+        and not req.exclude_dishes
+    )
+    cache_key = make_cache_key(req.ingredients, count)
+    if is_cache_eligible:
+        cached_response = _get_cached_recommendation(db, cache_key, now)
+        if cached_response:
+            return cached_response.model_copy(
+                update={"input_ingredients": req.ingredients}
+            )
+
+    # Local-first: skip when allow_extra or preferences are set.
     is_local_eligible = not req.allow_extra and not req.preferences
     local_dishes: list[RecommendedDish] = []
 
@@ -186,6 +262,9 @@ async def recommend_by_ingredients(
                 dishes=local_dishes[:count],
                 input_ingredients=req.ingredients,
             )
+
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
 
     # Need AI for all or remaining dishes
     ai_count = count - len(local_dishes)
@@ -248,10 +327,13 @@ async def recommend_by_ingredients(
             )
         )
 
-    return IngredientRecommendResponse(
+    response = IngredientRecommendResponse(
         dishes=local_dishes + ai_dishes,
         input_ingredients=req.ingredients,
     )
+    if is_cache_eligible:
+        _store_recommendation(db, cache_key, response, now)
+    return response
 
 
 CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
