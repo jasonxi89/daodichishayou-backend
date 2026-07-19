@@ -7,12 +7,12 @@
 前端为独立仓库（Taro + React + TS），本仓库只负责后端。
 
 ## 当前状态
-- **开发版本**: v1.14.0（`feature/zero-wait`；尚未合并/推送/部署）
-- **生产版本/镜像 SHA**: v1.13.1 `61b313b312d7907a24e8a3ed3abfd3386a6662ef`（2026-07-17 部署）
-- **测试基线**: 329 tests pass / 95.43% coverage（CI 门控 95%）
-- **生产健康检查**: `GET https://food.zuitian.ai/api/health` 仍应返回 `{"status":"ok","version":"1.13.1"}`
+- **开发版本**: v1.14.1（零等待 Stage A/B + 菜谱步骤补全双通道，2026-07-18）
+- **生产版本/镜像 SHA**: v1.13.1 `61b313b312d7907a24e8a3ed3abfd3386a6662ef`（2026-07-17 部署；Stage C 部署 v1.14.1 进行中，完成后更新此行）
+- **测试基线**: 352 tests pass / 95.64% coverage（CI 门控 95%）
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
-- `feature/zero-wait` 已完成 Stage A/B 代码与对抗审查，工作区干净；Stage C 合并、推送、部署与生产验证尚未执行
+- **步骤数据补全（2026-07-18 用户决策，取代此前的"合规阻断"）**: 双通道并行——`scripts/backfill_steps_via_llm.py`（LLM 按菜名+配料补写，落 `steps_source='llm'`）+ `scripts/backfill_recipe_steps.py`（下厨房真实补爬，落 `'scraped'`，可覆盖 llm，反向禁止）。核心逻辑在 `app/crawler/steps_backfill.py`，逐行 commit 可断点续跑、连续 5 失败熔断、CAPTCHA 即停。**实测下厨房风控极敏感（10s 间隔第 2 个请求即 CAPTCHA）**，真实补爬默认 30s 间隔、预期进度缓慢
+- 步骤全空的根因已修（`xiachufang.py::_parse_detail_page`：JSON-LD 字符串形态 recipeInstructions 未处理 + 提前 return 挡住 DOM fallback；详见 `docs/plans/xiachufang-selector-notes.md`）
 
 ## 技术栈与结构
 - **栈**: FastAPI 0.115 + SQLAlchemy 2.0 + SQLite（WAL 模式）+ APScheduler + httpx + BeautifulSoup4；LLM 走 **OpenRouter**（`openai` SDK，非 anthropic）；Docker + GitHub Actions CI/CD
@@ -63,9 +63,9 @@ docker compose up --build
 
 ## 进行中 / TODO
 - **零等待 Stage A/B 已实现并通过双 reviewer**：缓存/预生成、阻塞 LLM 隔离、quick+steps、AsyncOpenAI NDJSON 流、静默降级、严格本地菜谱解析、输入/缓存/并发安全均已完成。最终门控 329 tests / 95.43%。前端 v1.8.0 同步完成 184 tests + WeChat build。
-- **Stage C 尚未执行**：两仓仍在 `feature/zero-wait`；下一步是按 `docs/plans/2026-07-17-zero-wait-ux.md` 合并/推送、构建 SHA 镜像、NAS 部署、健康检查和真机回归。未经明确授权不要直接部署。
-- **A1-A3 数据抓取未执行**：未请求下厨房、未保存第三方页面 fixture、未对抓取数据做 LLM backfill；原因与边界见 `docs/plans/xiachufang-selector-notes.md`。菜谱抓取 scheduler 和手工入口现默认禁用（`RECIPE_SCRAPE_ENABLED=false`）。
-- **生产 656 条 recipes 的 `steps_json` 可能仍为空**：`/steps` 不会按模糊菜名复用无上下文本地菜谱，只使用 exact-context cache 或带请求上下文的 LLM，避免错配主食材/过敏原。
+- **Stage C 部分执行中（2026-07-18 用户授权）**：后端合并部署 v1.14.1 + 生产补全（LLM 先行、真实补爬跟进）；前端仍在 `feature/zero-wait` 等真机回归后合并提审。
+- **A1-A3 已完成（2026-07-18）**：真实页面 fixture 已存（`tests/fixtures/xiachufang_detail_2026.html`）、解析 bug 已修、双通道补全脚本已建；`RECIPE_SCRAPE_ENABLED` 代码默认仍 false，**部署时在 NAS compose 显式置 true** 恢复每周菜谱抓取（用户决策）。
+- **`/steps` 端点仍不复用无上下文本地菜谱**（防错配主食材/过敏原）：补全的 steps 主要惠及老端点 `/api/recommend` 本地秒回与降级链兜底；若要新流程复用真实菜谱（菜名精确匹配+食材相容），是后续可选小任务。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
 - **A6 双模型竞速未实现**：该任务本来就是可选；现有降级链可配置 fast model 串行重试，不是双模型并发竞速。
 - **README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）：以本 HANDOFF 为准，有空可同步更新 README。
