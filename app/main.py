@@ -42,6 +42,13 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).warning(
             "v1.9.0 迁移失败，跳过继续启动", exc_info=True
         )
+    try:
+        from app.migrations.add_steps_source import migrate_steps_source
+        migrate_steps_source(engine)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "steps_source 迁移失败，跳过继续启动", exc_info=True
+        )
     seed_data()
 
     if CRAWL_USE_SMART_SCHEDULE:

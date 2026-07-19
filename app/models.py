@@ -78,6 +78,9 @@ class Recipe(Base):
     ingredients_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     ingredients_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     steps_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 步骤数据来源：'scraped'=真实抓取 / 'llm'=AI 补写 / NULL=无步骤。
+    # 优先级 scraped > llm，补爬可覆盖 llm，反向禁止（见 steps_backfill）
+    steps_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     list_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
