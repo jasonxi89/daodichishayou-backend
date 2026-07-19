@@ -65,7 +65,7 @@ docker compose up --build
 
 ## 进行中 / TODO
 - **零等待 Stage A/B 已实现并通过双 reviewer**：缓存/预生成、阻塞 LLM 隔离、quick+steps、AsyncOpenAI NDJSON 流、静默降级、严格本地菜谱解析、输入/缓存/并发安全均已完成。最终门控 329 tests / 95.43%。前端 v1.8.0 同步完成 184 tests + WeChat build。
-- **Stage C 部分执行中（2026-07-18 用户授权）**：后端合并部署 v1.14.1 + 生产补全（LLM 先行、真实补爬跟进）；前端仍在 `feature/zero-wait` 等真机回归后合并提审。
+- **Stage C 基本完成（2026-07-18）**：后端 v1.14.1 已部署 + 生产补全进行中（LLM 先行、真实补爬跟进）；前端 v1.8.0 已合并 main（`31a5aea`）并提交微信审核，待审核通过发布。
 - **A1-A3 已完成（2026-07-18）**：真实页面 fixture 已存（`tests/fixtures/xiachufang_detail_2026.html`）、解析 bug 已修、双通道补全脚本已建；`RECIPE_SCRAPE_ENABLED` 代码默认仍 false，**部署时在 NAS compose 显式置 true** 恢复每周菜谱抓取（用户决策）。
 - **`/steps` 端点仍不复用无上下文本地菜谱**（防错配主食材/过敏原）：补全的 steps 主要惠及老端点 `/api/recommend` 本地秒回与降级链兜底；若要新流程复用真实菜谱（菜名精确匹配+食材相容），是后续可选小任务。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。

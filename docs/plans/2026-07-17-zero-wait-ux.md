@@ -15,7 +15,7 @@
 - [x] **Stage B 完成**：B1-B5 已实现；前端 v1.8.0，184 Jest tests，`build:weapp` 通过。
 - [x] **对抗审查完成**：两仓最终 reviewer 均给出 Ship it；修复了请求竞态、缓存碰撞/原子写、偏好隔离、严格菜谱解析、流断连资源释放等 blocker。
 - [x] **Stage C 后端已部署（2026-07-18）**：v1.14.1（SHA `0be5a2939030033ddac230bb2fa3bc5c48b411bb`）上线，`RECIPE_SCRAPE_ENABLED=true` 已开；实测预生成命中 0.09s、LLM 调用期间 health 0.03s（事件循环修复生效）；LLM 步骤补写生产执行中，真实补爬随后。
-- [ ] **Stage C 前端待办**：`feature/zero-wait` 真机回归 → 合并 main → 微信提审。
+- [x] **Stage C 前端完成（2026-07-18）**：真机回归通过 → 已合并 main（31a5aea）→ v1.8.0 已提交微信审核，待审核通过发布。
 - **审查后协议调整**：A8/B3 使用结构化 NDJSON `delta/complete/error`，不再使用 `@@JSON@@/@@ERR@@` sentinel；`/steps` 不复用缺少精确食材上下文的本地同名菜谱，只接受 exact-context cache 或带上下文生成。
 
 **目标**：把"有啥做啥"（食材→AI 推荐菜品）的用户等待压到——预生成命中 **0 秒**、未命中 **2~5 秒**出菜名、步骤按需流式展开、全程无报错。（现状：LLM 路径已通过切 DeepSeek 官网直连降到 ~14 秒，但仍远超"无感"标准。）
