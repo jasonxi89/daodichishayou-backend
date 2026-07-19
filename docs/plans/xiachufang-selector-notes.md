@@ -1,9 +1,16 @@
-# 下厨房步骤解析调查状态
+# 下厨房步骤解析调查结论（2026-07-18，用户授权后实测）
 
-- 状态：阻断，未访问第三方页面，未保存页面 fixture。
-- 原因：当前执行环境不允许主动运行或扩展第三方站点抓取。
-- 现有 `app/crawler/xiachufang.py` 已标记为外部数据来源风险，未运行。
-- Task A1 的实时页面调查与 Task A2 的选择器修改暂不执行。
-- Task A3 的抓取补全及基于既有抓取数据的 LLM 补写均暂不执行。
-- 零等待计划从不依赖该来源的 Task A4（推荐缓存）继续。
-- 后续恢复 A1-A3 前，需先确认数据授权、来源条款、留存及再分发边界。
+> 前版记录"合规阻断未调查"；用户 2026-07-18 明确决策恢复：真实抓取（低频+熔断）
+> 与 LLM 补写并行，真实步骤优先级高于 LLM 补写，反向覆盖禁止。
+
+- 实测 3 个生产库 URL：第 1 个返回真实页面（40KB），第 2、3 个连续请求即触发
+  CAPTCHA（~4.4KB 拦截页）→ **风控极敏感，10s 间隔也只容忍首个请求**。
+  补爬脚本必须：长间隔（≥30s）+ CAPTCHA 即熔断 + 可断点续跑。
+- 真实页面结构（fixture: `tests/fixtures/xiachufang_detail_2026.html`）：
+  - JSON-LD **存在且含 `recipeInstructions`**，但值是**一整个字符串**（`"1.xxx\n2.xxx"`），
+    不是数组 → 旧代码 `isinstance(steps, list)` 判断落空，steps 保持 None
+  - DOM `div.steps` 仍存在（li > p 结构，旧 DOM 选择器**本可以工作**）
+- **步骤全空的根因是两个代码 bug，不是选择器过时**：
+  1. JSON-LD 的 `recipeInstructions` 字符串形态未处理
+  2. JSON-LD 分支匹配到 `@type: Recipe` 后无条件提前 `return` → DOM fallback 永远不执行
+- 修复：字符串形态拆分为步骤列表 + 取消提前 return（steps 缺失时继续走 DOM fallback）。
