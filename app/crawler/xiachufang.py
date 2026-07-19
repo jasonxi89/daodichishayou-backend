@@ -134,6 +134,20 @@ def _parse_list_page(html: str, category: str) -> list[RecipeItem]:
     return items
 
 
+def _split_instruction_text(text: str) -> list[dict]:
+    """把 JSON-LD 里整段字符串形态的步骤拆成 [{"text": ...}] 列表。
+
+    2026 版页面的 recipeInstructions 是 "1.xxx\n2.xxx" 的单字符串，
+    按行拆分并剥掉行首序号。
+    """
+    steps = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"^\s*\d+\s*[.、．)）]\s*", "", line).strip()
+        if cleaned:
+            steps.append({"text": cleaned})
+    return steps
+
+
 def _parse_detail_page(html: str, item: RecipeItem) -> RecipeItem:
     """Enrich a RecipeItem with detail page data (ingredients + steps)."""
     soup = BeautifulSoup(html, "html.parser")
@@ -159,6 +173,10 @@ def _parse_detail_page(html: str, item: RecipeItem) -> RecipeItem:
                             {"text": s} if isinstance(s, str) else s
                             for s in steps
                         ]
+                    elif isinstance(steps, str) and steps.strip():
+                        parsed = _split_instruction_text(steps)
+                        if parsed:
+                            item.steps = parsed
                 if data.get("aggregateRating"):
                     rating_val = data["aggregateRating"].get("ratingValue")
                     if rating_val:
@@ -167,13 +185,14 @@ def _parse_detail_page(html: str, item: RecipeItem) -> RecipeItem:
                     item.image_url = data["image"]
                 if data.get("author", {}).get("name"):
                     item.author = data["author"]["name"]
-                return item
+                # 不能在这里提前 return：JSON-LD 可能缺步骤（生产 656 条
+                # steps 全 NULL 的根因之一），缺什么就继续走 DOM 补什么
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # Fallback: parse HTML structure
+    # Fallback: parse HTML structure, 只补 JSON-LD 没给的字段
     # Ingredients: <div class="ings"> or similar
-    ings_div = soup.find("div", class_="ings")
+    ings_div = None if item.ingredients else soup.find("div", class_="ings")
     if ings_div:
         ingredients = []
         names = []
