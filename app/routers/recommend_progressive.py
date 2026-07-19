@@ -17,6 +17,7 @@ from app.config import (
     LLM_TIMEOUT_SECONDS,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
+    OPENROUTER_FAST_MODEL,
     OPENROUTER_MODEL,
 )
 from app.database import get_db
@@ -30,6 +31,7 @@ from app.schemas import (
     RecommendedDish,
 )
 from app.services.recipe_search import recipe_to_dish
+from app.services.recommend_fallback import get_fallback_recommendation
 from app.services.recommend_cache import (
     get_cached_recommendation,
     make_cache_key,
@@ -77,6 +79,8 @@ def generate_quick_dishes_via_llm(
     preferences: str | None,
     allow_extra: bool,
     exclude_dishes: list[str] | None,
+    *,
+    model: str | None = None,
 ) -> list[QuickRecommendedDish]:
     """Synchronously generate lightweight dish cards."""
     prompt = [f"食材：{', '.join(ingredients)}", f"推荐{count}道菜。"]
@@ -87,7 +91,7 @@ def generate_quick_dishes_via_llm(
     if exclude_dishes:
         prompt.append(f"不要重复：{'、'.join(exclude_dishes)}")
     message = _client().chat.completions.create(
-        model=OPENROUTER_MODEL,
+        model=model or OPENROUTER_MODEL,
         max_tokens=800,
         messages=[
             {"role": "system", "content": QUICK_SYSTEM_PROMPT},
@@ -257,9 +261,20 @@ async def recommend_quick(
             )
 
     if not OPENROUTER_API_KEY:
+        fallback = get_fallback_recommendation(
+            db,
+            req.ingredients,
+            count,
+            req.exclude_dishes or None,
+        )
+        if fallback:
+            return QuickRecommendResponse(
+                dishes=_quick_from_full(fallback),
+                input_ingredients=req.ingredients,
+            )
         raise HTTPException(
             status_code=500,
-            detail="OPENROUTER_API_KEY not configured",
+            detail="No recommendation source is currently available",
         )
     try:
         dishes = await asyncio.to_thread(
@@ -270,12 +285,43 @@ async def recommend_quick(
             req.allow_extra,
             req.exclude_dishes or None,
         )
-    except (openai.OpenAIError, json.JSONDecodeError, ValueError) as exc:
-        logger.error("Quick recommendation failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail="AI service temporarily unavailable",
-        ) from exc
+    except (openai.OpenAIError, json.JSONDecodeError, ValueError) as error:
+        logger.warning("Primary quick recommendation failed: %s", error)
+        dishes = []
+        if OPENROUTER_FAST_MODEL:
+            try:
+                dishes = await asyncio.to_thread(
+                    generate_quick_dishes_via_llm,
+                    req.ingredients,
+                    count,
+                    req.preferences,
+                    req.allow_extra,
+                    req.exclude_dishes or None,
+                    model=OPENROUTER_FAST_MODEL,
+                )
+            except (
+                openai.OpenAIError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as fast_error:
+                logger.warning("Fast quick fallback failed: %s", fast_error)
+
+        if not dishes:
+            fallback = get_fallback_recommendation(
+                db,
+                req.ingredients,
+                count,
+                req.exclude_dishes or None,
+            )
+            if fallback:
+                return QuickRecommendResponse(
+                    dishes=_quick_from_full(fallback),
+                    input_ingredients=req.ingredients,
+                )
+            raise HTTPException(
+                status_code=502,
+                detail="AI service temporarily unavailable",
+            ) from error
 
     # Deliberately do not store partial quick payloads in RecommendCache.
     return QuickRecommendResponse(

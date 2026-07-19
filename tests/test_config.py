@@ -39,3 +39,9 @@ def test_pregeneration_defaults():
 
     assert PREGEN_ENABLED is True
     assert PREGEN_DAILY_BUDGET == 120
+
+
+def test_fast_model_is_disabled_by_default():
+    from app.config import OPENROUTER_FAST_MODEL
+
+    assert OPENROUTER_FAST_MODEL == ""

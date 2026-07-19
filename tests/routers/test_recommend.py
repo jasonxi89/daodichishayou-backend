@@ -24,11 +24,15 @@ VALID_DISHES_JSON = json.dumps({
 })
 
 
-def test_recommend_no_api_key(client, monkeypatch):
+def test_recommend_no_api_key_and_no_fallback_returns_500(
+    client, monkeypatch
+):
     monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
-    resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
+    resp = client.post(
+        "/api/recommend", json={"ingredients": ["无匹配测试食材"]}
+    )
     assert resp.status_code == 500
-    assert "OPENROUTER_API_KEY" in resp.json()["detail"]
+    assert "No recommendation source" in resp.json()["detail"]
 
 
 def test_recommend_empty_ingredients(client, monkeypatch):
@@ -377,11 +381,13 @@ def test_foods_by_category_success(client, monkeypatch):
         assert data["category"] == "川菜"
 
 
-def test_foods_by_category_no_api_key(client, monkeypatch):
+def test_foods_by_category_no_key_or_cache_returns_500(
+    client, monkeypatch
+):
     monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
     resp = client.post("/api/foods-by-category", json={"category": "川菜"})
     assert resp.status_code == 500
-    assert "OPENROUTER_API_KEY" in resp.json()["detail"]
+    assert "No category source" in resp.json()["detail"]
 
 
 def test_foods_by_category_json_parse_fail(client, monkeypatch):
@@ -449,9 +455,9 @@ def test_foods_by_category_cache_hit(client, db, monkeypatch):
     """When a valid (non-expired) cache exists, API should NOT be called."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
 
-    # Pre-insert a cache row with future expires_at
+    # A valid cache remains available when the LLM key is absent.
     cache_entry = FoodsCategoryCache(
         category="川菜",
         foods=json.dumps(["回锅肉", "宫保鸡丁"], ensure_ascii=False),
@@ -536,10 +542,10 @@ VALID_BULK_FOODS_JSON = json.dumps({
 
 
 def test_bulk_all_cached(client, db, monkeypatch):
-    """When all requested categories are cached, API should NOT be called."""
+    """All cached categories work without an LLM API key."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
 
     for cat, foods in [("家常下饭", ["红烧肉", "番茄炒蛋"]), ("火锅烫涮", ["四川火锅", "酸汤火锅"])]:
         db.add(FoodsCategoryCache(
@@ -611,11 +617,14 @@ def test_bulk_partial_cache(client, db, monkeypatch):
         assert "家常下饭" not in user_content
 
 
-def test_bulk_no_api_key(client, monkeypatch):
+def test_bulk_no_key_or_cache_returns_500(client, monkeypatch):
     monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
-    resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
+    resp = client.post(
+        "/api/bulk-foods-by-category",
+        json={"categories": ["家常下饭"]},
+    )
     assert resp.status_code == 500
-    assert "OPENROUTER_API_KEY" in resp.json()["detail"]
+    assert "No category source" in resp.json()["detail"]
 
 
 def test_bulk_claude_error(client, monkeypatch):

@@ -13,6 +13,7 @@ from app.config import (
     LLM_TIMEOUT_SECONDS,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
+    OPENROUTER_FAST_MODEL,
     OPENROUTER_MODEL,
 )
 from app.database import get_db
@@ -27,6 +28,7 @@ from app.schemas import (
     RecommendedDish,
 )
 from app.services.recipe_search import search_local_recipes as _search_local_recipes
+from app.services.recommend_fallback import get_fallback_recommendation
 from app.services.recommend_cache import (
     get_cached_recommendation as _get_cached_recommendation,
     make_cache_key,
@@ -125,6 +127,8 @@ def generate_dishes_via_llm(
     preferences: str | None,
     allow_extra: bool = False,
     exclude_dishes: list[str] | None = None,
+    *,
+    model: str | None = None,
 ) -> list[RecommendedDish]:
     """Synchronously generate complete dishes through the configured LLM."""
     client = OpenAI(
@@ -134,7 +138,7 @@ def generate_dishes_via_llm(
     )
     system_prompt = SYSTEM_PROMPT_EXTRA if allow_extra else SYSTEM_PROMPT
     message = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
+        model=model or OPENROUTER_MODEL,
         max_tokens=4096,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -210,13 +214,25 @@ async def recommend_by_ingredients(
             )
 
     if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
+        fallback = get_fallback_recommendation(
+            db,
+            req.ingredients,
+            count,
+            req.exclude_dishes or None,
+        )
+        if fallback:
+            return fallback
+        raise HTTPException(
+            status_code=500,
+            detail="No recommendation source is currently available",
+        )
 
     # Need AI for all or remaining dishes
     ai_count = count - len(local_dishes)
     ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
     ai_exclude.extend(d.name for d in local_dishes)
 
+    used_model = OPENROUTER_MODEL
     try:
         ai_dishes = await asyncio.to_thread(
             generate_dishes_via_llm,
@@ -226,18 +242,43 @@ async def recommend_by_ingredients(
             req.allow_extra,
             ai_exclude or None,
         )
-    except openai.OpenAIError as e:
-        logger.error("LLM API error: %s", e)
-        raise HTTPException(
-            status_code=502,
-            detail="AI service temporarily unavailable",
-        ) from e
-    except json.JSONDecodeError as e:
-        logger.error("Failed to parse LLM dish response")
-        raise HTTPException(
-            status_code=502,
-            detail="AI response format error",
-        ) from e
+    except (openai.OpenAIError, json.JSONDecodeError, ValueError) as error:
+        logger.warning("Primary recommendation failed: %s", error)
+        if OPENROUTER_FAST_MODEL:
+            try:
+                ai_dishes = await asyncio.to_thread(
+                    generate_dishes_via_llm,
+                    req.ingredients,
+                    ai_count,
+                    req.preferences,
+                    req.allow_extra,
+                    ai_exclude or None,
+                    model=OPENROUTER_FAST_MODEL,
+                )
+                used_model = OPENROUTER_FAST_MODEL
+            except (
+                openai.OpenAIError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as fast_error:
+                logger.warning("Fast recommendation fallback failed: %s", fast_error)
+                ai_dishes = []
+        else:
+            ai_dishes = []
+
+        if not ai_dishes:
+            fallback = get_fallback_recommendation(
+                db,
+                req.ingredients,
+                count,
+                req.exclude_dishes or None,
+            )
+            if fallback:
+                return fallback
+            raise HTTPException(
+                status_code=502,
+                detail="AI service temporarily unavailable",
+            ) from error
 
     response = IngredientRecommendResponse(
         dishes=local_dishes + ai_dishes,
@@ -248,7 +289,7 @@ async def recommend_by_ingredients(
             db,
             cache_key,
             response,
-            OPENROUTER_MODEL,
+            used_model,
             now,
         )
     return response
@@ -298,10 +339,7 @@ def generate_foods_by_category_via_llm(
 
 @router.post("/foods-by-category", response_model=GenerateFoodsResponse)
 async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get_db)):
-    if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
-
-    # Check cache first
+    # Check non-LLM cache before requiring an API key.
     cached = (
         db.query(FoodsCategoryCache)
         .filter(
@@ -314,6 +352,12 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
         return GenerateFoodsResponse(
             foods=json.loads(cached.foods),
             category=req.category,
+        )
+
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="No category source is currently available",
         )
 
     count = max(1, min(req.count, 50))
@@ -407,9 +451,6 @@ def generate_bulk_foods_by_category_via_llm(
 
 @router.post("/bulk-foods-by-category", response_model=BulkGenerateFoodsResponse)
 async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = Depends(get_db)):
-    if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
-
     if not req.categories:
         return BulkGenerateFoodsResponse(results={})
 
@@ -435,6 +476,12 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
     # All cached — return immediately without calling Claude
     if not uncached_categories:
         return BulkGenerateFoodsResponse(results=cached_results)
+
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="No category source is currently available",
+        )
 
     try:
         data = await asyncio.to_thread(
