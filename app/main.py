@@ -19,7 +19,7 @@ from app.crawler.scheduler import (
     seed_data,
 )
 from app.database import Base, engine
-from app.routers import admin, trending, recommend, recipe
+from app.routers import admin, recipe, recommend, recommend_progressive, trending
 from app.schemas import HealthResponse
 
 logging.basicConfig(
@@ -113,6 +113,7 @@ app.add_middleware(
 
 app.include_router(trending.router)
 app.include_router(recommend.router)
+app.include_router(recommend_progressive.router)
 app.include_router(recipe.router)
 app.include_router(admin.router)
 

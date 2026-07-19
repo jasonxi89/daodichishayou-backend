@@ -70,6 +70,23 @@ class IngredientRecommendResponse(BaseModel):
     input_ingredients: list[str]
 
 
+class QuickRecommendedDish(BaseModel):
+    name: str
+    summary: str
+    difficulty: str | None = None
+    cook_time: str | None = None
+
+
+class QuickRecommendResponse(BaseModel):
+    dishes: list[QuickRecommendedDish]
+    input_ingredients: list[str]
+
+
+class DishStepsRequest(BaseModel):
+    dish_name: str
+    ingredients: list[str]
+
+
 class GenerateFoodsRequest(BaseModel):
     category: str
     count: int = 30
