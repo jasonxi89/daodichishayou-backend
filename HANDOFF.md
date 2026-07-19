@@ -8,7 +8,9 @@
 
 ## 当前状态
 - **开发版本**: v1.14.1（零等待 Stage A/B + 菜谱步骤补全双通道，2026-07-18）
-- **生产版本/镜像 SHA**: v1.13.1 `61b313b312d7907a24e8a3ed3abfd3386a6662ef`（2026-07-17 部署；Stage C 部署 v1.14.1 进行中，完成后更新此行）
+- **生产版本/镜像 SHA**: v1.14.1 `0be5a2939030033ddac230bb2fa3bc5c48b411bb`（2026-07-18 部署；回滚备份 compose `.bak.pre1141` = v1.13.1 `61b313b...`）
+- **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
+- **生产补全进行中**: LLM 步骤补写后台跑（`/app/data/backfill_llm.log`，~8s/条 ×656 ≈ 1.5h）；完成后跑真实补爬升级（预期 CAPTCHA 很快熔断，跑到哪算哪）；每日 03:30 pregen cron 会逐日铺满 465 组合矩阵（预算 120/天）
 - **测试基线**: 352 tests pass / 95.64% coverage（CI 门控 95%）
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
 - **步骤数据补全（2026-07-18 用户决策，取代此前的"合规阻断"）**: 双通道并行——`scripts/backfill_steps_via_llm.py`（LLM 按菜名+配料补写，落 `steps_source='llm'`）+ `scripts/backfill_recipe_steps.py`（下厨房真实补爬，落 `'scraped'`，可覆盖 llm，反向禁止）。核心逻辑在 `app/crawler/steps_backfill.py`，逐行 commit 可断点续跑、连续 5 失败熔断、CAPTCHA 即停。**实测下厨房风控极敏感（10s 间隔第 2 个请求即 CAPTCHA）**，真实补爬默认 30s 间隔、预期进度缓慢

@@ -10,11 +10,12 @@
 > 下方逐步 checkbox 保留为原始实施设计，不再逐项代表当前实况；以本节、两仓 `HANDOFF.md` 和代码测试为准。
 
 - [x] **Stage A 核心完成**：A4、A5、A7、A8、A9、A10 已实现；后端 v1.14.0，329 tests，95.43% coverage。
-- [ ] **A1-A3 未执行**：合规边界下未调用第三方站点、未存页面 fixture、未运行抓取数据或 LLM backfill；记录见 `xiachufang-selector-notes.md`。菜谱抓取默认关闭。
+- [x] **A1-A3 已完成（2026-07-18 用户授权后补做）**：真实页面 fixture 已存、步骤解析两处根因已修（JSON-LD 字符串形态 + 提前 return，见 `xiachufang-selector-notes.md`）、双通道补全落地（`app/crawler/steps_backfill.py` + `scripts/backfill_steps_via_llm.py` / `backfill_recipe_steps.py`，优先级 scraped>llm、幂等断点续跑、熔断/CAPTCHA 即停）；`recipes.steps_source` 列迁移随启动幂等执行。后端 v1.14.1，352 tests，95.64%。
 - [ ] **A6 未执行**：可选双模型竞速跳过；保留 fast model 串行降级。
 - [x] **Stage B 完成**：B1-B5 已实现；前端 v1.8.0，184 Jest tests，`build:weapp` 通过。
 - [x] **对抗审查完成**：两仓最终 reviewer 均给出 Ship it；修复了请求竞态、缓存碰撞/原子写、偏好隔离、严格菜谱解析、流断连资源释放等 blocker。
-- [ ] **Stage C 未执行**：两仓仍在本地 `feature/zero-wait`，未合并、推送、部署或提交微信审核。
+- [x] **Stage C 后端已部署（2026-07-18）**：v1.14.1（SHA `0be5a2939030033ddac230bb2fa3bc5c48b411bb`）上线，`RECIPE_SCRAPE_ENABLED=true` 已开；实测预生成命中 0.09s、LLM 调用期间 health 0.03s（事件循环修复生效）；LLM 步骤补写生产执行中，真实补爬随后。
+- [ ] **Stage C 前端待办**：`feature/zero-wait` 真机回归 → 合并 main → 微信提审。
 - **审查后协议调整**：A8/B3 使用结构化 NDJSON `delta/complete/error`，不再使用 `@@JSON@@/@@ERR@@` sentinel；`/steps` 不复用缺少精确食材上下文的本地同名菜谱，只接受 exact-context cache 或带上下文生成。
 
 **目标**：把"有啥做啥"（食材→AI 推荐菜品）的用户等待压到——预生成命中 **0 秒**、未命中 **2~5 秒**出菜名、步骤按需流式展开、全程无报错。（现状：LLM 路径已通过切 DeepSeek 官网直连降到 ~14 秒，但仍远超"无感"标准。）
