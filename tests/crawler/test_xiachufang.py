@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -315,3 +316,80 @@ def test_scraper_detail_captcha_stops_enrichment():
 
     # Items from list pages are still returned
     assert len(items) > 0
+
+
+# --- 2026-07-18: 步骤解析修复（真实页面 fixture + 两个根因回归） ---
+
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+
+SAMPLE_LD_STRING_INSTRUCTIONS = (
+    '<html><body><script type="application/ld+json">'
+    + json.dumps(
+        {
+            "@type": "Recipe",
+            "name": "测试菜",
+            "recipeIngredient": ["鸡蛋 2个", "番茄 1个"],
+            "recipeInstructions": "1.鸡蛋打散备用\n2.番茄切块下锅\n3.倒入蛋液翻炒出锅",
+        },
+        ensure_ascii=False,
+    )
+    + "</script></body></html>"
+)
+
+SAMPLE_LD_NO_STEPS_WITH_DOM = """
+<html><body>
+<script type="application/ld+json">
+{"@type": "Recipe", "name": "测试菜", "recipeIngredient": ["鸡蛋 2个"]}
+</script>
+<div class="steps"><ol>
+<li><p class="text">第一步：打鸡蛋</p></li>
+<li><p class="text">第二步：热锅倒油</p></li>
+<li><p class="text">第三步：翻炒出锅</p></li>
+</ol></div>
+</body></html>
+"""
+
+
+def test_parse_detail_page_extracts_steps_from_2026_fixture():
+    """真实 2026 详情页：步骤必须解析出来（历史 bug：生产 656 条全 NULL）。"""
+    from app.crawler.xiachufang import _parse_detail_page
+    from app.crawler.recipe_base import RecipeItem
+
+    html = (FIXTURES_DIR / "xiachufang_detail_2026.html").read_text(
+        encoding="utf-8"
+    )
+    item = RecipeItem(
+        name="测试菜", source_url="https://www.xiachufang.com/recipe/x/"
+    )
+    result = _parse_detail_page(html, item)
+    assert result.steps, "2026 版详情页应能解析出步骤"
+    assert len(result.steps) >= 3
+    assert all(s.get("text") for s in result.steps)
+    assert result.ingredients_text
+
+
+def test_parse_detail_page_json_ld_string_instructions():
+    """JSON-LD 的 recipeInstructions 是整段字符串时应拆成步骤并去掉序号。"""
+    from app.crawler.xiachufang import _parse_detail_page
+    from app.crawler.recipe_base import RecipeItem
+
+    item = RecipeItem(name="测试菜", source_url="u")
+    result = _parse_detail_page(SAMPLE_LD_STRING_INSTRUCTIONS, item)
+    assert result.steps is not None
+    assert len(result.steps) == 3
+    assert result.steps[0]["text"] == "鸡蛋打散备用"
+    assert result.steps[2]["text"] == "倒入蛋液翻炒出锅"
+
+
+def test_parse_detail_page_falls_through_to_dom_when_ld_lacks_steps():
+    """JSON-LD 匹配但无 recipeInstructions 时，不能提前 return，要走 DOM 解析。"""
+    from app.crawler.xiachufang import _parse_detail_page
+    from app.crawler.recipe_base import RecipeItem
+
+    item = RecipeItem(name="测试菜", source_url="u")
+    result = _parse_detail_page(SAMPLE_LD_NO_STEPS_WITH_DOM, item)
+    assert result.steps is not None, "JSON-LD 无步骤时应 fallback 到 DOM"
+    assert len(result.steps) == 3
+    assert result.steps[0]["text"] == "第一步：打鸡蛋"
+    # JSON-LD 的配料仍应生效
+    assert result.ingredients_text == "鸡蛋 2个"
