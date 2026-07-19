@@ -6,7 +6,8 @@ import logging
 from datetime import datetime, timezone
 
 import openai
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -100,6 +101,22 @@ def generate_quick_dishes_via_llm(
     return [QuickRecommendedDish(**item) for item in data.get("dishes", [])]
 
 
+def _steps_messages(
+    dish_name: str,
+    ingredients: list[str],
+) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": STEPS_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"菜名：{dish_name}\n"
+                f"用户现有食材：{', '.join(ingredients)}"
+            ),
+        },
+    ]
+
+
 def generate_steps_via_llm(
     dish_name: str,
     ingredients: list[str],
@@ -108,21 +125,45 @@ def generate_steps_via_llm(
     message = _client().chat.completions.create(
         model=OPENROUTER_MODEL,
         max_tokens=4096,
-        messages=[
-            {"role": "system", "content": STEPS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"菜名：{dish_name}\n"
-                    f"用户现有食材：{', '.join(ingredients)}"
-                ),
-            },
-        ],
+        messages=_steps_messages(dish_name, ingredients),
     )
     raw_text = _strip_code_fence(
         (message.choices[0].message.content or "").strip()
     )
     return RecommendedDish(**json.loads(raw_text))
+
+
+def _stream_complete_dish(dish: RecommendedDish):
+    """Yield a cached/local dish using the streaming protocol marker."""
+    yield f"\n@@JSON@@{dish.model_dump_json()}"
+
+
+def _stream_steps_from_llm(
+    dish_name: str,
+    ingredients: list[str],
+):
+    """Synchronously forward LLM deltas, then append validated JSON."""
+    raw_parts: list[str] = []
+    try:
+        chunks = _client().chat.completions.create(
+            model=OPENROUTER_MODEL,
+            max_tokens=4096,
+            messages=_steps_messages(dish_name, ingredients),
+            stream=True,
+        )
+        for chunk in chunks:
+            content = chunk.choices[0].delta.content
+            if not content:
+                continue
+            raw_parts.append(content)
+            yield content
+
+        raw_text = _strip_code_fence("".join(raw_parts).strip())
+        dish = RecommendedDish(**json.loads(raw_text))
+        yield f"\n@@JSON@@{dish.model_dump_json()}"
+    except Exception:
+        logger.exception("Dish steps stream failed")
+        yield "\n@@ERR@@"
 
 
 def _quick_from_full(
@@ -246,15 +287,26 @@ async def recommend_quick(
 @router.post("/steps", response_model=RecommendedDish)
 async def recommend_steps(
     req: DishStepsRequest,
+    stream: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     now = datetime.now(timezone.utc)
     cached = _find_cached_dish(db, req.dish_name, now)
     if cached:
+        if stream:
+            return StreamingResponse(
+                _stream_complete_dish(cached),
+                media_type="text/plain",
+            )
         return cached
 
     local = _find_local_dish(db, req.dish_name)
     if local:
+        if stream:
+            return StreamingResponse(
+                _stream_complete_dish(local),
+                media_type="text/plain",
+            )
         return local
 
     if not OPENROUTER_API_KEY:
@@ -262,6 +314,12 @@ async def recommend_steps(
             status_code=500,
             detail="OPENROUTER_API_KEY not configured",
         )
+    if stream:
+        return StreamingResponse(
+            _stream_steps_from_llm(req.dish_name, req.ingredients),
+            media_type="text/plain",
+        )
+
     try:
         return await asyncio.to_thread(
             generate_steps_via_llm,
