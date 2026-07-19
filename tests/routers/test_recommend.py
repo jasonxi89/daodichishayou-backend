@@ -35,11 +35,9 @@ def test_recommend_no_api_key_and_no_fallback_returns_500(
     assert "No recommendation source" in resp.json()["detail"]
 
 
-def test_recommend_empty_ingredients(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+def test_recommend_empty_ingredients_returns_422(client):
     resp = client.post("/api/recommend", json={"ingredients": []})
-    assert resp.status_code == 400
-    assert "ingredient" in resp.json()["detail"].lower()
+    assert resp.status_code == 422
 
 
 def test_recommend_success(client, monkeypatch):
@@ -153,7 +151,7 @@ def test_recommend_optional_dish_fields(client, monkeypatch):
         assert dish["cook_time"] is None
 
 
-def test_recommend_empty_dishes_list(client, monkeypatch):
+def test_recommend_empty_dishes_list_returns_502(client, monkeypatch):
     monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
     with patch("app.routers.recommend.OpenAI") as mock_openai:
         mock_client = MagicMock()
@@ -161,8 +159,7 @@ def test_recommend_empty_dishes_list(client, monkeypatch):
         mock_client.chat.completions.create.return_value = make_openai_response(json.dumps({"dishes": []}))
 
         resp = client.post("/api/recommend", json={"ingredients": ["未知食材"]})
-        assert resp.status_code == 200
-        assert resp.json()["dishes"] == []
+        assert resp.status_code == 502
 
 
 def test_recommend_allow_extra_uses_extra_prompt(client, monkeypatch):

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import RECIPE_SCRAPE_ENABLED
 from app.crawler.scheduler import run_recipe_scrapers
 from app.database import get_db
 from app.models import Recipe
@@ -122,5 +123,7 @@ def list_recipes(
 
 @router.post("/scrape", response_model=list[CrawlResult])
 def trigger_recipe_scrape(db: Session = Depends(get_db)):
-    """手动触发菜谱爬取。"""
+    """手动触发菜谱爬取；默认禁用，需显式授权后开启。"""
+    if not RECIPE_SCRAPE_ENABLED:
+        raise HTTPException(status_code=403, detail="Recipe scraping is disabled")
     return run_recipe_scrapers(db)

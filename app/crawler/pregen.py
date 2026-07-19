@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.config import OPENROUTER_MODEL, PREGEN_DAILY_BUDGET
@@ -85,27 +86,24 @@ def _upsert_cache(
     expires_at = now + _CACHE_TTL + timedelta(
         seconds=random.uniform(0, _MAX_TTL_JITTER_SECONDS)
     )
-    cached = (
-        db.query(RecommendCache)
-        .filter(RecommendCache.cache_key == cache_key)
-        .first()
-    )
     payload = response.model_dump_json()
-    if cached:
-        cached.payload = payload
-        cached.model = OPENROUTER_MODEL
-        cached.created_at = now
-        cached.expires_at = expires_at
-    else:
-        db.add(
-            RecommendCache(
-                cache_key=cache_key,
-                payload=payload,
-                model=OPENROUTER_MODEL,
-                created_at=now,
-                expires_at=expires_at,
-            )
-        )
+    statement = insert(RecommendCache).values(
+        cache_key=cache_key,
+        payload=payload,
+        model=OPENROUTER_MODEL,
+        created_at=now,
+        expires_at=expires_at,
+    )
+    statement = statement.on_conflict_do_update(
+        index_elements=[RecommendCache.cache_key],
+        set_={
+            "payload": payload,
+            "model": OPENROUTER_MODEL,
+            "created_at": now,
+            "expires_at": expires_at,
+        },
+    )
+    db.execute(statement)
     db.commit()
 
 

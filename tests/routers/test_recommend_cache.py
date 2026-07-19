@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 
 
@@ -42,6 +43,57 @@ def _mock_openai_response():
     return MagicMock(choices=[MagicMock(message=MagicMock(content=content))])
 
 
+def test_atomic_cache_upsert_survives_concurrent_writers(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from app.database import Base
+    from app.models import RecommendCache
+    from app.schemas import IngredientRecommendResponse
+    from app.services.recommend_cache import (
+        make_cache_key,
+        store_recommendation_on_bind,
+    )
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'cache.db'}")
+    Base.metadata.create_all(engine)
+    barrier = Barrier(2)
+
+    def write(name: str):
+        response = IngredientRecommendResponse(
+            dishes=[
+                {
+                    "name": name,
+                    "summary": "并发写",
+                    "ingredients": ["番茄"],
+                    "steps": ["完成"],
+                }
+            ],
+            input_ingredients=["番茄"],
+        )
+        barrier.wait()
+        store_recommendation_on_bind(
+            engine,
+            make_cache_key(["番茄"], 1),
+            response,
+            "test-model",
+            datetime.now(timezone.utc),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(write, ["方案A", "方案B"]))
+
+    from sqlalchemy.orm import Session
+    with Session(engine) as session:
+        rows = session.query(RecommendCache).all()
+        assert len(rows) == 1
+        assert json.loads(rows[0].payload)["dishes"][0]["name"] in {
+            "方案A",
+            "方案B",
+        }
+    engine.dispose()
+
+
 def test_recommend_cache_model_enforces_unique_key(db):
     from app.models import RecommendCache
 
@@ -73,12 +125,13 @@ def test_make_cache_key_normalizes_ingredients_and_includes_count():
     from app.routers.recommend import make_cache_key
 
     assert make_cache_key(["番茄", "鸡蛋"], 3) == make_cache_key(
-        ["鸡蛋", " 番 茄 "], 3
+        ["鸡蛋", " 番茄 "], 3
     )
+    assert make_cache_key(["番 茄"], 3) != make_cache_key(["番茄"], 3)
     assert make_cache_key(["番茄", "鸡蛋"], 3) != make_cache_key(
         ["番茄", "鸡蛋"], 5
     )
-    assert make_cache_key([" TOMATO ", "Egg"], 3) == "egg|tomato#c3"
+    assert make_cache_key([" TOMATO ", "Egg"], 3).startswith("recommend:v2:")
 
 
 def test_recommend_cache_hit_skips_local_and_llm(client, db, monkeypatch):
@@ -100,7 +153,7 @@ def test_recommend_cache_hit_skips_local_and_llm(client, db, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["dishes"] == CACHED_RESPONSE["dishes"]
-    assert response.json()["input_ingredients"] == ["鸡蛋", " 番茄 "]
+    assert response.json()["input_ingredients"] == ["鸡蛋", "番茄"]
     local_search.assert_not_called()
     openai_client.assert_not_called()
 

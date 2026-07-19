@@ -82,7 +82,7 @@ def test_recommend_old_cache_filters_excluded_dishes(
     ]
 
 
-def test_recommend_without_key_uses_incomplete_local_recipe(
+def test_legacy_recommend_without_key_rejects_incomplete_local_recipe(
     client, db, monkeypatch
 ):
     monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
@@ -106,11 +106,7 @@ def test_recommend_without_key_uses_incomplete_local_recipe(
         json={"ingredients": ["番茄"], "count": 1},
     )
 
-    assert response.status_code == 200
-    dish = response.json()["dishes"][0]
-    assert dish["name"] == "番茄拌饭"
-    assert dish["summary"] == "点开看详细做法"
-    assert dish["steps"] == []
+    assert response.status_code == 500
 
 
 def test_recommend_primary_failure_retries_configured_fast_model(

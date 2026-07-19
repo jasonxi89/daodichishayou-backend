@@ -1,6 +1,5 @@
 """Best-effort recommendation fallbacks used when the LLM is unavailable."""
 
-import json
 from collections.abc import Iterable
 
 from sqlalchemy import func, or_, select
@@ -8,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Recipe, RecommendCache
 from app.schemas import IngredientRecommendResponse, RecommendedDish
+from app.services.recipe_search import collect_valid_recipes
 
 
 def _normalized_ingredient(value: str) -> str:
@@ -37,9 +37,6 @@ def _old_cache_dishes(
 ) -> list[RecommendedDish]:
     rows = (
         db.query(RecommendCache)
-        .filter(
-            RecommendCache.cache_key.like(f"%{first_ingredient}%")
-        )
         .order_by(RecommendCache.created_at.desc())
         .all()
     )
@@ -51,45 +48,13 @@ def _old_cache_dishes(
             )
         except ValueError:
             continue
-        dishes.extend(response.dishes)
+        normalized_inputs = {
+            _normalized_ingredient(value)
+            for value in response.input_ingredients
+        }
+        if first_ingredient in normalized_inputs:
+            dishes.extend(response.dishes)
     return dishes
-
-
-def _safe_json_list(raw_value: str | None) -> list:
-    if not raw_value:
-        return []
-    try:
-        value = json.loads(raw_value)
-    except (json.JSONDecodeError, TypeError):
-        return []
-    return value if isinstance(value, list) else []
-
-
-def fallback_recipe_to_dish(recipe: Recipe) -> RecommendedDish:
-    """Convert even an incomplete local recipe into a safe card payload."""
-    ingredients_data = _safe_json_list(recipe.ingredients_json)
-    steps_data = _safe_json_list(recipe.steps_json)
-    ingredients = [
-        (
-            f"{item.get('name', '')} {item.get('amount', '适量')}".strip()
-            if isinstance(item, dict)
-            else str(item)
-        )
-        for item in ingredients_data
-    ]
-    if not ingredients and recipe.ingredients_text:
-        ingredients = recipe.ingredients_text.split()
-
-    steps = [
-        step.get("text", "") if isinstance(step, dict) else str(step)
-        for step in steps_data
-    ]
-    return RecommendedDish(
-        name=recipe.name,
-        summary="点开看详细做法",
-        ingredients=[value for value in ingredients if value],
-        steps=[value for value in steps if value],
-    )
 
 
 def _local_fallback_dishes(
@@ -97,9 +62,10 @@ def _local_fallback_dishes(
     ingredients: list[str],
     exclude_dishes: set[str],
     count: int,
+    require_complete: bool,
 ) -> list[RecommendedDish]:
     conditions = [
-        Recipe.ingredients_text.like(f"%{ingredient}%")
+        Recipe.ingredients_text.contains(ingredient, autoescape=True)
         for ingredient in ingredients
     ]
     if not conditions:
@@ -111,14 +77,15 @@ def _local_fallback_dishes(
     )
     if exclude_dishes:
         stmt = stmt.where(Recipe.name.notin_(exclude_dishes))
-    stmt = stmt.order_by(
+    stmt = stmt.where(
+        Recipe.ingredients_json.isnot(None),
+        Recipe.steps_json.isnot(None),
+    ).order_by(
         func.coalesce(Recipe.rating, 0).desc(),
         Recipe.made_count.desc(),
-    ).limit(count)
-    return [
-        fallback_recipe_to_dish(recipe)
-        for recipe in db.execute(stmt).scalars().all()
-    ]
+        Recipe.id.asc(),
+    )
+    return collect_valid_recipes(db, stmt, count)
 
 
 def get_fallback_recommendation(
@@ -126,6 +93,8 @@ def get_fallback_recommendation(
     ingredients: list[str],
     count: int,
     exclude_dishes: list[str] | None = None,
+    *,
+    require_complete: bool = False,
 ) -> IngredientRecommendResponse | None:
     """Try old full caches, then incomplete local recipes."""
     if not ingredients:
@@ -133,8 +102,15 @@ def get_fallback_recommendation(
 
     excluded = set(exclude_dishes or [])
     first_ingredient = _normalized_ingredient(ingredients[0])
+    cached_candidates = _old_cache_dishes(db, first_ingredient)
+    if require_complete:
+        cached_candidates = [
+            dish
+            for dish in cached_candidates
+            if dish.ingredients and dish.steps
+        ]
     cached = _unique_dishes(
-        _old_cache_dishes(db, first_ingredient),
+        cached_candidates,
         excluded,
         count,
     )
@@ -145,7 +121,13 @@ def get_fallback_recommendation(
         )
 
     local = _unique_dishes(
-        _local_fallback_dishes(db, ingredients, excluded, count),
+        _local_fallback_dishes(
+            db,
+            ingredients,
+            excluded,
+            count,
+            require_complete,
+        ),
         excluded,
         count,
     )

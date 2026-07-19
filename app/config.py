@@ -25,6 +25,7 @@ LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 PREGEN_ENABLED = os.getenv("PREGEN_ENABLED", "true").lower() == "true"
 PREGEN_DAILY_BUDGET = int(os.getenv("PREGEN_DAILY_BUDGET", "120"))
 AI_EXTRACT_ENABLED = os.getenv("AI_EXTRACT_ENABLED", "true").lower() == "true"
+RECIPE_SCRAPE_ENABLED = os.getenv("RECIPE_SCRAPE_ENABLED", "false").lower() == "true"
 RECIPE_SCRAPE_INTERVAL_DAYS = int(os.getenv("RECIPE_SCRAPE_INTERVAL_DAYS", "7"))
 
 # 所有 AI 端点共享的核心规则，必须嵌入每个 system prompt

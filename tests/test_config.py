@@ -45,3 +45,9 @@ def test_fast_model_is_disabled_by_default():
     from app.config import OPENROUTER_FAST_MODEL
 
     assert OPENROUTER_FAST_MODEL == ""
+
+
+def test_recipe_scraping_is_disabled_by_default():
+    from app.config import RECIPE_SCRAPE_ENABLED
+
+    assert RECIPE_SCRAPE_ENABLED is False

@@ -1,8 +1,13 @@
 """Persistence helpers for full recommendation payloads."""
 
+import hashlib
+import json
 import logging
+import unicodedata
 from datetime import datetime, timedelta
 
+from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app.models import RecommendCache
@@ -13,14 +18,32 @@ logger = logging.getLogger(__name__)
 RECOMMEND_CACHE_TTL = timedelta(days=7)
 
 
-def make_cache_key(ingredients: list[str], count: int) -> str:
-    """Return a stable key for an ingredient set and requested dish count."""
-    normalized = sorted(
-        "".join(ingredient.lower().split())
+def normalize_ingredients(ingredients: list[str]) -> list[str]:
+    """Normalize an ingredient set without destroying meaningful spaces."""
+    return sorted({
+        " ".join(
+            unicodedata.normalize("NFKC", ingredient).strip().casefold().split()
+        )
         for ingredient in ingredients
         if ingredient and ingredient.strip()
+    })
+
+
+def make_cache_key(ingredients: list[str], count: int) -> str:
+    """Return a collision-resistant key for ingredients and dish count."""
+    normalized = normalize_ingredients(ingredients)
+    canonical = json.dumps(
+        {
+            "version": 2,
+            "ingredients": normalized,
+            "count": count,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     )
-    return f"{'|'.join(normalized)}#c{count}"
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"recommend:v2:{digest}"
 
 
 def get_cached_recommendation(
@@ -46,6 +69,24 @@ def get_cached_recommendation(
         return None
 
 
+def store_recommendation_on_bind(
+    bind: Engine | Connection,
+    cache_key: str,
+    response: IngredientRecommendResponse,
+    model: str,
+    now: datetime,
+) -> None:
+    """Persist through a worker-owned Session bound to the existing engine."""
+    with Session(bind=bind) as session:
+        store_recommendation(
+            session,
+            cache_key,
+            response,
+            model,
+            now,
+        )
+
+
 def store_recommendation(
     db: Session,
     cache_key: str,
@@ -54,24 +95,22 @@ def store_recommendation(
     now: datetime,
 ) -> None:
     payload = response.model_dump_json()
-    cached = (
-        db.query(RecommendCache)
-        .filter(RecommendCache.cache_key == cache_key)
-        .first()
+    expires_at = now + RECOMMEND_CACHE_TTL
+    statement = insert(RecommendCache).values(
+        cache_key=cache_key,
+        payload=payload,
+        model=model,
+        created_at=now,
+        expires_at=expires_at,
     )
-    if cached:
-        cached.payload = payload
-        cached.model = model
-        cached.created_at = now
-        cached.expires_at = now + RECOMMEND_CACHE_TTL
-    else:
-        db.add(
-            RecommendCache(
-                cache_key=cache_key,
-                payload=payload,
-                model=model,
-                created_at=now,
-                expires_at=now + RECOMMEND_CACHE_TTL,
-            )
-        )
+    statement = statement.on_conflict_do_update(
+        index_elements=[RecommendCache.cache_key],
+        set_={
+            "payload": payload,
+            "model": model,
+            "created_at": now,
+            "expires_at": expires_at,
+        },
+    )
+    db.execute(statement)
     db.commit()

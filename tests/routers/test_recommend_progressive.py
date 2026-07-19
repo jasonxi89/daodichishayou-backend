@@ -165,11 +165,11 @@ def test_quick_llm_error_returns_502(client, monkeypatch):
     assert response.status_code == 502
 
 
-def test_quick_empty_ingredients_returns_400(client):
+def test_quick_empty_ingredients_returns_422(client):
     response = client.post(
         "/api/recommend/quick", json={"ingredients": [], "count": 1}
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 def test_quick_missing_ingredients_returns_422(client):
@@ -194,7 +194,8 @@ def test_steps_uses_full_cache_before_llm(client, db, monkeypatch):
     _insert_full_cache(db)
 
     with patch(
-        "app.routers.recommend_progressive.generate_steps_via_llm"
+        "app.routers.recommend_progressive.generate_steps_via_llm",
+        return_value=FULL_DISH,
     ) as generate:
         response = client.post(
             "/api/recommend/steps",
@@ -206,7 +207,7 @@ def test_steps_uses_full_cache_before_llm(client, db, monkeypatch):
     generate.assert_not_called()
 
 
-def test_steps_uses_local_recipe_before_llm(client, db, monkeypatch):
+def test_steps_does_not_reuse_context_free_local_recipe(client, db, monkeypatch):
     monkeypatch.setattr(
         "app.routers.recommend_progressive.OPENROUTER_API_KEY", "test-key"
     )
@@ -229,7 +230,8 @@ def test_steps_uses_local_recipe_before_llm(client, db, monkeypatch):
     db.commit()
 
     with patch(
-        "app.routers.recommend_progressive.generate_steps_via_llm"
+        "app.routers.recommend_progressive.generate_steps_via_llm",
+        return_value=FULL_DISH,
     ) as generate:
         response = client.post(
             "/api/recommend/steps",
@@ -237,9 +239,8 @@ def test_steps_uses_local_recipe_before_llm(client, db, monkeypatch):
         )
 
     assert response.status_code == 200
-    assert response.json()["name"] == "番茄炒蛋"
-    assert response.json()["steps"] == ["切番茄", "炒熟"]
-    generate.assert_not_called()
+    assert response.json() == FULL_DISH.model_dump()
+    generate.assert_called_once()
 
 
 def test_steps_ignores_invalid_cache_payload(client, db, monkeypatch):

@@ -8,8 +8,7 @@ from datetime import datetime, timezone
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from openai import OpenAI
-from sqlalchemy import func, select
+from openai import AsyncOpenAI, OpenAI
 from sqlalchemy.orm import Session
 
 from app.config import (
@@ -21,7 +20,7 @@ from app.config import (
     OPENROUTER_MODEL,
 )
 from app.database import get_db
-from app.models import Recipe, RecommendCache
+from app.models import RecommendCache
 from app.schemas import (
     DishStepsRequest,
     IngredientRecommendRequest,
@@ -30,11 +29,11 @@ from app.schemas import (
     QuickRecommendedDish,
     RecommendedDish,
 )
-from app.services.recipe_search import recipe_to_dish
 from app.services.recommend_fallback import get_fallback_recommendation
 from app.services.recommend_cache import (
     get_cached_recommendation,
     make_cache_key,
+    normalize_ingredients,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +72,14 @@ def _client() -> OpenAI:
     )
 
 
+def _async_client() -> AsyncOpenAI:
+    return AsyncOpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+
+
 def generate_quick_dishes_via_llm(
     ingredients: list[str],
     count: int,
@@ -102,72 +109,122 @@ def generate_quick_dishes_via_llm(
         (message.choices[0].message.content or "").strip()
     )
     data = json.loads(raw_text)
-    return [QuickRecommendedDish(**item) for item in data.get("dishes", [])]
+    if not isinstance(data, dict) or not isinstance(data.get("dishes"), list):
+        raise ValueError("LLM response must contain a dishes list")
+    dishes = [
+        QuickRecommendedDish.model_validate(item)
+        for item in data["dishes"][:count]
+    ]
+    if not dishes:
+        raise ValueError("LLM returned no dishes")
+    return dishes
 
 
 def _steps_messages(
     dish_name: str,
     ingredients: list[str],
+    preferences: str | None = None,
+    allow_extra: bool = False,
 ) -> list[dict[str, str]]:
+    context = [
+        f"菜名：{dish_name}",
+        f"用户现有食材：{', '.join(ingredients)}",
+    ]
+    if preferences:
+        context.append(f"偏好与限制：{preferences}")
+    context.append(
+        "允许额外购买1-2种主料" if allow_extra else "不得增加额外主料"
+    )
     return [
         {"role": "system", "content": STEPS_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                f"菜名：{dish_name}\n"
-                f"用户现有食材：{', '.join(ingredients)}"
-            ),
-        },
+        {"role": "user", "content": "\n".join(context)},
     ]
 
 
 def generate_steps_via_llm(
     dish_name: str,
     ingredients: list[str],
+    preferences: str | None = None,
+    allow_extra: bool = False,
 ) -> RecommendedDish:
     """Synchronously generate the complete recipe for one selected dish."""
     message = _client().chat.completions.create(
         model=OPENROUTER_MODEL,
         max_tokens=4096,
-        messages=_steps_messages(dish_name, ingredients),
+        messages=_steps_messages(
+            dish_name,
+            ingredients,
+            preferences,
+            allow_extra,
+        ),
     )
     raw_text = _strip_code_fence(
         (message.choices[0].message.content or "").strip()
     )
-    return RecommendedDish(**json.loads(raw_text))
+    dish = RecommendedDish.model_validate(json.loads(raw_text))
+    if not dish.ingredients or not dish.steps:
+        raise ValueError("LLM returned an incomplete dish")
+    return dish
+
+
+def _stream_frame(frame: dict) -> str:
+    return json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + "\n"
 
 
 def _stream_complete_dish(dish: RecommendedDish):
-    """Yield a cached/local dish using the streaming protocol marker."""
-    yield f"\n@@JSON@@{dish.model_dump_json()}"
+    """Yield a cached/local dish as one complete NDJSON frame."""
+    yield _stream_frame(
+        {"type": "complete", "dish": dish.model_dump(mode="json")}
+    )
 
 
-def _stream_steps_from_llm(
+async def _stream_steps_from_llm(
     dish_name: str,
     ingredients: list[str],
+    preferences: str | None = None,
+    allow_extra: bool = False,
 ):
-    """Synchronously forward LLM deltas, then append validated JSON."""
+    """Asynchronously stream NDJSON and own provider cancellation cleanup."""
     raw_parts: list[str] = []
+    client = _async_client()
+    chunks = None
     try:
-        chunks = _client().chat.completions.create(
+        chunks = await client.chat.completions.create(
             model=OPENROUTER_MODEL,
             max_tokens=4096,
-            messages=_steps_messages(dish_name, ingredients),
+            messages=_steps_messages(
+                dish_name,
+                ingredients,
+                preferences,
+                allow_extra,
+            ),
             stream=True,
         )
-        for chunk in chunks:
+        async for chunk in chunks:
             content = chunk.choices[0].delta.content
             if not content:
                 continue
             raw_parts.append(content)
-            yield content
+            yield _stream_frame({"type": "delta", "text": content})
 
         raw_text = _strip_code_fence("".join(raw_parts).strip())
-        dish = RecommendedDish(**json.loads(raw_text))
-        yield f"\n@@JSON@@{dish.model_dump_json()}"
+        dish = RecommendedDish.model_validate(json.loads(raw_text))
+        yield _stream_frame(
+            {"type": "complete", "dish": dish.model_dump(mode="json")}
+        )
+    except asyncio.CancelledError:
+        raise
     except Exception:
         logger.exception("Dish steps stream failed")
-        yield "\n@@ERR@@"
+        yield _stream_frame(
+            {"type": "error", "code": "provider_interrupted"}
+        )
+    finally:
+        try:
+            if chunks is not None:
+                await chunks.close()
+        finally:
+            await client.close()
 
 
 def _quick_from_full(
@@ -187,14 +244,12 @@ def _quick_from_full(
 def _find_cached_dish(
     db: Session,
     dish_name: str,
+    ingredients: list[str],
     now: datetime,
 ) -> RecommendedDish | None:
     rows = (
         db.query(RecommendCache)
-        .filter(
-            RecommendCache.expires_at > now,
-            RecommendCache.payload.like(f"%{dish_name}%"),
-        )
+        .filter(RecommendCache.expires_at > now)
         .order_by(RecommendCache.created_at.desc())
         .all()
     )
@@ -205,30 +260,14 @@ def _find_cached_dish(
             )
         except ValueError:
             continue
+        if normalize_ingredients(response.input_ingredients) != normalize_ingredients(
+            ingredients
+        ):
+            continue
         for dish in response.dishes:
             if dish.name == dish_name:
                 return dish
     return None
-
-
-def _find_local_dish(
-    db: Session,
-    dish_name: str,
-) -> RecommendedDish | None:
-    recipe = db.execute(
-        select(Recipe)
-        .where(
-            Recipe.name.like(f"%{dish_name}%"),
-            Recipe.ingredients_json.isnot(None),
-            Recipe.steps_json.isnot(None),
-        )
-        .order_by(
-            func.coalesce(Recipe.rating, 0).desc(),
-            Recipe.made_count.desc(),
-        )
-        .limit(1)
-    ).scalar_one_or_none()
-    return recipe_to_dish(recipe) if recipe else None
 
 
 @router.post("/quick", response_model=QuickRecommendResponse)
@@ -260,13 +299,14 @@ async def recommend_quick(
                 input_ingredients=req.ingredients,
             )
 
+    fallback_allowed = not req.preferences and not req.allow_extra
     if not OPENROUTER_API_KEY:
         fallback = get_fallback_recommendation(
             db,
             req.ingredients,
             count,
             req.exclude_dishes or None,
-        )
+        ) if fallback_allowed else None
         if fallback:
             return QuickRecommendResponse(
                 dishes=_quick_from_full(fallback),
@@ -276,6 +316,7 @@ async def recommend_quick(
             status_code=500,
             detail="No recommendation source is currently available",
         )
+    db.rollback()
     try:
         dishes = await asyncio.to_thread(
             generate_quick_dishes_via_llm,
@@ -285,6 +326,8 @@ async def recommend_quick(
             req.allow_extra,
             req.exclude_dishes or None,
         )
+        if not dishes:
+            raise ValueError("LLM returned no dishes")
     except (openai.OpenAIError, json.JSONDecodeError, ValueError) as error:
         logger.warning("Primary quick recommendation failed: %s", error)
         dishes = []
@@ -299,6 +342,8 @@ async def recommend_quick(
                     req.exclude_dishes or None,
                     model=OPENROUTER_FAST_MODEL,
                 )
+                if not dishes:
+                    raise ValueError("Fast model returned no dishes")
             except (
                 openai.OpenAIError,
                 json.JSONDecodeError,
@@ -312,7 +357,7 @@ async def recommend_quick(
                 req.ingredients,
                 count,
                 req.exclude_dishes or None,
-            )
+            ) if fallback_allowed else None
             if fallback:
                 return QuickRecommendResponse(
                     dishes=_quick_from_full(fallback),
@@ -337,33 +382,36 @@ async def recommend_steps(
     db: Session = Depends(get_db),
 ):
     now = datetime.now(timezone.utc)
-    cached = _find_cached_dish(db, req.dish_name, now)
+    context_is_generic = not req.preferences and not req.allow_extra
+    cached = _find_cached_dish(
+        db,
+        req.dish_name,
+        req.ingredients,
+        now,
+    ) if context_is_generic else None
     if cached:
         if stream:
             return StreamingResponse(
                 _stream_complete_dish(cached),
-                media_type="text/plain",
+                media_type="application/x-ndjson",
             )
         return cached
-
-    local = _find_local_dish(db, req.dish_name)
-    if local:
-        if stream:
-            return StreamingResponse(
-                _stream_complete_dish(local),
-                media_type="text/plain",
-            )
-        return local
 
     if not OPENROUTER_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="OPENROUTER_API_KEY not configured",
         )
+    db.rollback()
     if stream:
         return StreamingResponse(
-            _stream_steps_from_llm(req.dish_name, req.ingredients),
-            media_type="text/plain",
+            _stream_steps_from_llm(
+                req.dish_name,
+                req.ingredients,
+                req.preferences,
+                req.allow_extra,
+            ),
+            media_type="application/x-ndjson",
         )
 
     try:
@@ -371,6 +419,8 @@ async def recommend_steps(
             generate_steps_via_llm,
             req.dish_name,
             req.ingredients,
+            req.preferences,
+            req.allow_extra,
         )
     except (openai.OpenAIError, json.JSONDecodeError, ValueError) as exc:
         logger.error("Dish steps generation failed: %s", exc)

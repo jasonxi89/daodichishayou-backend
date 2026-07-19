@@ -32,7 +32,7 @@ from app.services.recommend_fallback import get_fallback_recommendation
 from app.services.recommend_cache import (
     get_cached_recommendation as _get_cached_recommendation,
     make_cache_key,
-    store_recommendation as _store_recommendation,
+    store_recommendation_on_bind,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,18 +158,15 @@ def generate_dishes_via_llm(
         (message.choices[0].message.content or "").strip()
     )
     data = json.loads(raw_text)
-    return [
-        RecommendedDish(
-            name=item.get("name", ""),
-            summary=item.get("summary", ""),
-            ingredients=item.get("ingredients", []),
-            steps=item.get("steps", []),
-            difficulty=item.get("difficulty"),
-            cook_time=item.get("cook_time"),
-            extra_ingredients=item.get("extra_ingredients"),
-        )
-        for item in data.get("dishes", [])
+    if not isinstance(data, dict) or not isinstance(data.get("dishes"), list):
+        raise ValueError("LLM response must contain a dishes list")
+    dishes = [
+        RecommendedDish.model_validate(item)
+        for item in data["dishes"][:count]
     ]
+    if not dishes:
+        raise ValueError("LLM returned no dishes")
+    return dishes
 
 
 @router.post("/recommend", response_model=IngredientRecommendResponse)
@@ -213,19 +210,25 @@ async def recommend_by_ingredients(
                 input_ingredients=req.ingredients,
             )
 
+    fallback_allowed = not req.preferences and not req.allow_extra
     if not OPENROUTER_API_KEY:
         fallback = get_fallback_recommendation(
             db,
             req.ingredients,
             count,
             req.exclude_dishes or None,
-        )
+            require_complete=True,
+        ) if fallback_allowed else None
         if fallback:
             return fallback
         raise HTTPException(
             status_code=500,
             detail="No recommendation source is currently available",
         )
+
+    # Release the request transaction before waiting on the provider.
+    bind = db.get_bind()
+    db.rollback()
 
     # Need AI for all or remaining dishes
     ai_count = count - len(local_dishes)
@@ -242,6 +245,8 @@ async def recommend_by_ingredients(
             req.allow_extra,
             ai_exclude or None,
         )
+        if not ai_dishes:
+            raise ValueError("LLM returned no dishes")
     except (openai.OpenAIError, json.JSONDecodeError, ValueError) as error:
         logger.warning("Primary recommendation failed: %s", error)
         if OPENROUTER_FAST_MODEL:
@@ -255,6 +260,8 @@ async def recommend_by_ingredients(
                     ai_exclude or None,
                     model=OPENROUTER_FAST_MODEL,
                 )
+                if not ai_dishes:
+                    raise ValueError("Fast model returned no dishes")
                 used_model = OPENROUTER_FAST_MODEL
             except (
                 openai.OpenAIError,
@@ -272,7 +279,8 @@ async def recommend_by_ingredients(
                 req.ingredients,
                 count,
                 req.exclude_dishes or None,
-            )
+                require_complete=True,
+            ) if fallback_allowed else None
             if fallback:
                 return fallback
             raise HTTPException(
@@ -285,8 +293,9 @@ async def recommend_by_ingredients(
         input_ingredients=req.ingredients,
     )
     if is_cache_eligible:
-        _store_recommendation(
-            db,
+        await asyncio.to_thread(
+            store_recommendation_on_bind,
+            bind,
             cache_key,
             response,
             used_model,

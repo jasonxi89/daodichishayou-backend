@@ -10,6 +10,7 @@ from app.config import (
     CRAWL_SCHEDULE_HOURS,
     CRAWL_USE_SMART_SCHEDULE,
     PREGEN_ENABLED,
+    RECIPE_SCRAPE_ENABLED,
     RECIPE_SCRAPE_INTERVAL_DAYS,
 )
 from app.crawler.scheduler import (
@@ -70,13 +71,14 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
         )
 
-    scheduler.add_job(
-        scheduled_recipe_scrape,
-        "interval",
-        days=RECIPE_SCRAPE_INTERVAL_DAYS,
-        id="recipe_scrape",
-        replace_existing=True,
-    )
+    if RECIPE_SCRAPE_ENABLED:
+        scheduler.add_job(
+            scheduled_recipe_scrape,
+            "interval",
+            days=RECIPE_SCRAPE_INTERVAL_DAYS,
+            id="recipe_scrape",
+            replace_existing=True,
+        )
     if PREGEN_ENABLED:
         scheduler.add_job(
             scheduled_pregeneration,

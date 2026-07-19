@@ -192,7 +192,8 @@ def test_list_recipes_sorted_by_rating(client, db):
     assert ratings == sorted(ratings, reverse=True)
 
 
-def test_trigger_scrape(client, db):
+def test_trigger_scrape(client, db, monkeypatch):
+    monkeypatch.setattr("app.routers.recipe.RECIPE_SCRAPE_ENABLED", True)
     with patch("app.routers.recipe.run_recipe_scrapers") as mock_scrape:
         from app.schemas import CrawlResult
 
@@ -210,6 +211,14 @@ def test_trigger_scrape(client, db):
     assert len(data) == 1
     assert data[0]["source"] == "xiachufang"
     assert data[0]["status"] == "success"
+
+
+def test_trigger_scrape_is_disabled_by_default(client):
+    with patch("app.routers.recipe.run_recipe_scrapers") as mock_scrape:
+        response = client.post("/api/recipes/scrape")
+
+    assert response.status_code == 403
+    mock_scrape.assert_not_called()
 
 
 def test_list_recipes_empty(client, db):
