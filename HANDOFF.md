@@ -1,5 +1,5 @@
 # HANDOFF — 到底吃啥哟 · 后端
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-17 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-18 | 改动项目后请同步更新此文档
 
 ## 项目定位
 微信小程序「到底吃啥哟」的后端服务：一个 FastAPI + SQLite 的**美食热度 API**，帮用户解决"今天吃什么"。
@@ -7,12 +7,12 @@
 前端为独立仓库（Taro + React + TS），本仓库只负责后端。
 
 ## 当前状态
-- **版本**: v1.13.1（`app/config.py` → `APP_VERSION`；`main.py` FastAPI 也读同一常量）
-- **部署镜像 SHA**: `61b313b312d7907a24e8a3ed3abfd3386a6662ef`（2026-07-17 部署）
-- **测试基线**: 261 tests pass / 96% coverage（CI 门控 95%）
-- **健康检查**: `GET https://food.zuitian.ai/api/health` → `{"status":"ok","version":"1.13.1"}`（已实测）
+- **开发版本**: v1.14.0（`feature/zero-wait`；尚未合并/推送/部署）
+- **生产版本/镜像 SHA**: v1.13.1 `61b313b312d7907a24e8a3ed3abfd3386a6662ef`（2026-07-17 部署）
+- **测试基线**: 329 tests pass / 95.43% coverage（CI 门控 95%）
+- **生产健康检查**: `GET https://food.zuitian.ai/api/health` 仍应返回 `{"status":"ok","version":"1.13.1"}`
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
-- main 与 origin/main 同步，工作区干净，无待办部署事项
+- `feature/zero-wait` 已完成 Stage A/B 代码与对抗审查，工作区干净；Stage C 合并、推送、部署与生产验证尚未执行
 
 ## 技术栈与结构
 - **栈**: FastAPI 0.115 + SQLAlchemy 2.0 + SQLite（WAL 模式）+ APScheduler + httpx + BeautifulSoup4；LLM 走 **OpenRouter**（`openai` SDK，非 anthropic）；Docker + GitHub Actions CI/CD
@@ -31,7 +31,7 @@
   └── migrations/        # backfill_v1_9_0（启动时幂等执行）
   tests/                 # pytest，asyncio_mode=auto，按 routers/crawler 分子目录
   ```
-- **主要端点**: `GET /api/health`、`GET /api/trending`（聚合排行）、`GET /api/trending/digest`（每日快报）、`POST /api/recommend`（AI 食材配菜）、`GET /api/recipes/search`（菜名/食材搜索）、`POST /api/foods-by-category` 及 bulk 版、`POST /api/admin/merge-aliases`。完整文档见 `/docs`。
+- **主要端点**: `GET /api/health`、`GET /api/trending`、`GET /api/trending/digest`、`POST /api/recommend`、`POST /api/recommend/quick`、`POST /api/recommend/steps`（支持 NDJSON stream）、`GET /api/recipes/search`、`POST /api/foods-by-category` 及 bulk 版、`POST /api/admin/merge-aliases`。完整文档见 `/docs`。
 
 ## 常用命令
 ```bash
@@ -62,9 +62,12 @@ docker compose up --build
 - 诊断技巧：客户端超时断开的请求 uvicorn **不写 access log**（后端日志里会"隐形"，只留孤儿 httpx OpenRouter 行）。
 
 ## 进行中 / TODO
-- **⭐ 零等待体验改造待执行（一次性完成版）**：完整实施计划在 `docs/plans/2026-07-17-zero-wait-ux.md`（2026-07-18 已重构为一口气改完、单次发版：后端 →1.14.0 / 前端 →1.8.0；Stage A 后端 → Stage B 前端 → Stage C 部署验证；自包含，任何 agent 可直接按 checkbox 执行；含爬虫修复/预生成矩阵/两段式 quick+steps/流式/投机预取/静默降级，模型竞速已降为可选。同日已过对抗审核修订 13 处，含一个现存线上问题：async 端点同步调 LLM 阻塞整个事件循环，修复并入计划 Task A5）。下面的 steps_json 问题已并入该计划 Task A1-A3
-- **本地菜谱库 `steps_json` 全空**（生产 656 条 recipes 步骤全 NULL）：下厨房 `xiachufang.py` 的 `_parse_detail_page` 步骤选择器过时（配料解析正常，仅步骤失效）→ `_search_local_recipes` 过滤 `steps_json IS NOT NULL` 永远匹配 0 → **recommend 每次都走 LLM（约 20-50s）**，本地秒回从未生效。修法见上述计划 Task 1.1-1.3。
+- **零等待 Stage A/B 已实现并通过双 reviewer**：缓存/预生成、阻塞 LLM 隔离、quick+steps、AsyncOpenAI NDJSON 流、静默降级、严格本地菜谱解析、输入/缓存/并发安全均已完成。最终门控 329 tests / 95.43%。前端 v1.8.0 同步完成 184 tests + WeChat build。
+- **Stage C 尚未执行**：两仓仍在 `feature/zero-wait`；下一步是按 `docs/plans/2026-07-17-zero-wait-ux.md` 合并/推送、构建 SHA 镜像、NAS 部署、健康检查和真机回归。未经明确授权不要直接部署。
+- **A1-A3 数据抓取未执行**：未请求下厨房、未保存第三方页面 fixture、未对抓取数据做 LLM backfill；原因与边界见 `docs/plans/xiachufang-selector-notes.md`。菜谱抓取 scheduler 和手工入口现默认禁用（`RECIPE_SCRAPE_ENABLED=false`）。
+- **生产 656 条 recipes 的 `steps_json` 可能仍为空**：`/steps` 不会按模糊菜名复用无上下文本地菜谱，只使用 exact-context cache 或带请求上下文的 LLM，避免错配主食材/过敏原。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
+- **A6 双模型竞速未实现**：该任务本来就是可选；现有降级链可配置 fast model 串行重试，不是双模型并发竞速。
 - **README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）：以本 HANDOFF 为准，有空可同步更新 README。
 
 ## 相关资源
