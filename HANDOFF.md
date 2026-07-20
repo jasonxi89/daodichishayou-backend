@@ -1,5 +1,5 @@
 # HANDOFF — 到底吃啥哟 · 后端
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-18 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-20 | 改动项目后请同步更新此文档
 
 ## 项目定位
 微信小程序「到底吃啥哟」的后端服务：一个 FastAPI + SQLite 的**美食热度 API**，帮用户解决"今天吃什么"。
@@ -10,7 +10,8 @@
 - **开发版本**: v1.14.1（零等待 Stage A/B + 菜谱步骤补全双通道，2026-07-18）
 - **生产版本/镜像 SHA**: v1.14.1 `0be5a2939030033ddac230bb2fa3bc5c48b411bb`（2026-07-18 部署；回滚备份 compose `.bak.pre1141` = v1.13.1 `61b313b...`）
 - **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
-- **生产补全进行中**: LLM 步骤补写后台跑（`/app/data/backfill_llm.log`，~8s/条 ×656 ≈ 1.5h）；完成后跑真实补爬升级（预期 CAPTCHA 很快熔断，跑到哪算哪）；每日 03:30 pregen cron 会逐日铺满 465 组合矩阵（预算 120/天）
+- **生产补全（2026-07-20 验收）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级（`scripts/backfill_recipe_steps.py`，30s 间隔、CAPTCHA 即停、scraped 可覆盖 llm）已于 2026-07-20 后台启动，日志 `/app/data/backfill_scrape.log`，跑到哪算哪
+- **465 组合矩阵已手动一次性铺满（2026-07-20 触发）**: 验收时 fresh 243/465，剩余 222 组合以 budget=465 后台补齐（容器内 `/tmp/run_pregen.py`，日志 `/app/data/pregen_manual.log`，成本约 ¥2-4）；每日 03:30 cron（预算 120/天）继续兜底刷新过期项
 - **测试基线**: 352 tests pass / 95.64% coverage（CI 门控 95%）
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
 - **步骤数据补全（2026-07-18 用户决策，取代此前的"合规阻断"）**: 双通道并行——`scripts/backfill_steps_via_llm.py`（LLM 按菜名+配料补写，落 `steps_source='llm'`）+ `scripts/backfill_recipe_steps.py`（下厨房真实补爬，落 `'scraped'`，可覆盖 llm，反向禁止）。核心逻辑在 `app/crawler/steps_backfill.py`，逐行 commit 可断点续跑、连续 5 失败熔断、CAPTCHA 即停。**实测下厨房风控极敏感（10s 间隔第 2 个请求即 CAPTCHA）**，真实补爬默认 30s 间隔、预期进度缓慢
@@ -65,7 +66,7 @@ docker compose up --build
 
 ## 进行中 / TODO
 - **零等待 Stage A/B 已实现并通过双 reviewer**：缓存/预生成、阻塞 LLM 隔离、quick+steps、AsyncOpenAI NDJSON 流、静默降级、严格本地菜谱解析、输入/缓存/并发安全均已完成。最终门控 329 tests / 95.43%。前端 v1.8.0 同步完成 184 tests + WeChat build。
-- **Stage C 基本完成（2026-07-18）**：后端 v1.14.1 已部署 + 生产补全进行中（LLM 先行、真实补爬跟进）；前端 v1.8.0 已合并 main（`31a5aea`）并提交微信审核，待审核通过发布。
+- **Stage C 已完成（2026-07-20）**：后端 v1.14.1 已部署、LLM 步骤补写完成（653/656）；**前端 v1.8.0 已于 2026-07-20 审核通过并发布上线**（合并 main `31a5aea`）。发布日 API 抽查：health 1.14.1 ✓ / quick 0.07s ✓ / steps 流式 0.11s ✓。
 - **A1-A3 已完成（2026-07-18）**：真实页面 fixture 已存（`tests/fixtures/xiachufang_detail_2026.html`）、解析 bug 已修、双通道补全脚本已建；`RECIPE_SCRAPE_ENABLED` 代码默认仍 false，**部署时在 NAS compose 显式置 true** 恢复每周菜谱抓取（用户决策）。
 - **`/steps` 端点仍不复用无上下文本地菜谱**（防错配主食材/过敏原）：补全的 steps 主要惠及老端点 `/api/recommend` 本地秒回与降级链兜底；若要新流程复用真实菜谱（菜名精确匹配+食材相容），是后续可选小任务。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
