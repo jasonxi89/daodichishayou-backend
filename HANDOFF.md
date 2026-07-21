@@ -7,12 +7,13 @@
 前端为独立仓库（Taro + React + TS），本仓库只负责后端。
 
 ## 当前状态
-- **开发版本**: v1.14.1（零等待 Stage A/B + 菜谱步骤补全双通道，2026-07-18）
-- **生产版本/镜像 SHA**: v1.14.1 `0be5a2939030033ddac230bb2fa3bc5c48b411bb`（2026-07-18 部署；回滚备份 compose `.bak.pre1141` = v1.13.1 `61b313b...`）
+- **开发版本**: v1.15.1（分类小注接口，2026-07-20）
+- **生产版本/镜像 SHA**: v1.15.1 `ba2a1e50de10619bbc2cfb236d2c15ee2d1de827`（2026-07-20 部署；回滚备份 compose `.bak.pre1150` = v1.14.1 `0be5a29...`）
+- **新端点 `GET /api/trending/categories/annotated`**（v1.15.0/1，供前端混血主题菜单格小字）：返回 `{categories:[{name,note}]}`；小注缺失时单次 LLM 批量生成→`category_notes` 表永久缓存（生产已生成 15 条，缓存命中 0.11s）；LLM 失败/无 key 时 note=null 静默降级，老端点 `/categories` 形状不变。⚠️ 解析必须截取 JSON 子串（v1.15.1 修复：deepseek 纯JSON prompt 仍可能带前后缀文字）
 - **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
 - **生产补全（2026-07-20 完成）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级**已尝试并失败**：`scripts/backfill_recipe_steps.py` 首个请求即 302→humancheck CAPTCHA 熔断（processed 1 / updated 0，日志 `/app/data/backfill_scrape.log`）——NAS 出口 IP 被下厨房风控锁定，短期勿重试；后续选项 = 等 IP 冷却 / 换代理出口 / 接受 llm 步骤为最终数据
 - **465 组合矩阵已铺满（2026-07-20 手动触发完成）**: fresh 243 → **462/465**（`/tmp/run_pregen.py` budget=465：attempts 223 / generated 219 / 4 次失败，日志 `/app/data/pregen_manual.log`，历时约 85 分钟）；剩 3 个组合与日常过期刷新由每日 03:30 cron（预算 120/天）兜底
-- **测试基线**: 352 tests pass / 95.64% coverage（CI 门控 95%）
+- **测试基线**: 359 tests pass / 96% coverage（CI 门控 95%）
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
 - **步骤数据补全（2026-07-18 用户决策，取代此前的"合规阻断"）**: 双通道并行——`scripts/backfill_steps_via_llm.py`（LLM 按菜名+配料补写，落 `steps_source='llm'`）+ `scripts/backfill_recipe_steps.py`（下厨房真实补爬，落 `'scraped'`，可覆盖 llm，反向禁止）。核心逻辑在 `app/crawler/steps_backfill.py`，逐行 commit 可断点续跑、连续 5 失败熔断、CAPTCHA 即停。**实测下厨房风控极敏感（10s 间隔第 2 个请求即 CAPTCHA）**，真实补爬默认 30s 间隔、预期进度缓慢
 - 步骤全空的根因已修（`xiachufang.py::_parse_detail_page`：JSON-LD 字符串形态 recipeInstructions 未处理 + 提前 return 挡住 DOM fallback；详见 `docs/plans/xiachufang-selector-notes.md`）
