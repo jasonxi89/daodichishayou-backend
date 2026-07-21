@@ -10,8 +10,8 @@
 - **开发版本**: v1.14.1（零等待 Stage A/B + 菜谱步骤补全双通道，2026-07-18）
 - **生产版本/镜像 SHA**: v1.14.1 `0be5a2939030033ddac230bb2fa3bc5c48b411bb`（2026-07-18 部署；回滚备份 compose `.bak.pre1141` = v1.13.1 `61b313b...`）
 - **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
-- **生产补全（2026-07-20 验收）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级（`scripts/backfill_recipe_steps.py`，30s 间隔、CAPTCHA 即停、scraped 可覆盖 llm）已于 2026-07-20 后台启动，日志 `/app/data/backfill_scrape.log`，跑到哪算哪
-- **465 组合矩阵已手动一次性铺满（2026-07-20 触发）**: 验收时 fresh 243/465，剩余 222 组合以 budget=465 后台补齐（容器内 `/tmp/run_pregen.py`，日志 `/app/data/pregen_manual.log`，成本约 ¥2-4）；每日 03:30 cron（预算 120/天）继续兜底刷新过期项
+- **生产补全（2026-07-20 完成）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级**已尝试并失败**：`scripts/backfill_recipe_steps.py` 首个请求即 302→humancheck CAPTCHA 熔断（processed 1 / updated 0，日志 `/app/data/backfill_scrape.log`）——NAS 出口 IP 被下厨房风控锁定，短期勿重试；后续选项 = 等 IP 冷却 / 换代理出口 / 接受 llm 步骤为最终数据
+- **465 组合矩阵已铺满（2026-07-20 手动触发完成）**: fresh 243 → **462/465**（`/tmp/run_pregen.py` budget=465：attempts 223 / generated 219 / 4 次失败，日志 `/app/data/pregen_manual.log`，历时约 85 分钟）；剩 3 个组合与日常过期刷新由每日 03:30 cron（预算 120/天）兜底
 - **测试基线**: 352 tests pass / 95.64% coverage（CI 门控 95%）
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
 - **步骤数据补全（2026-07-18 用户决策，取代此前的"合规阻断"）**: 双通道并行——`scripts/backfill_steps_via_llm.py`（LLM 按菜名+配料补写，落 `steps_source='llm'`）+ `scripts/backfill_recipe_steps.py`（下厨房真实补爬，落 `'scraped'`，可覆盖 llm，反向禁止）。核心逻辑在 `app/crawler/steps_backfill.py`，逐行 commit 可断点续跑、连续 5 失败熔断、CAPTCHA 即停。**实测下厨房风控极敏感（10s 间隔第 2 个请求即 CAPTCHA）**，真实补爬默认 30s 间隔、预期进度缓慢
