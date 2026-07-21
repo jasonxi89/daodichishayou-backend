@@ -370,3 +370,36 @@ def test_annotated_categories_without_api_key(client, sample_trends, monkeypatch
     assert resp.status_code == 200
     assert all(c["note"] is None for c in resp.json()["categories"])
     mock_openai.assert_not_called()
+
+
+def test_annotated_categories_tolerates_text_around_json(client, db, sample_trends, monkeypatch):
+    """模型在 JSON 前后加说明文字时仍能解析（线上实际发生过）。"""
+    monkeypatch.setattr("app.routers.trending.OPENROUTER_API_KEY", "test-key")
+    noisy = '好的，为您生成如下小注：\n{"正餐": "好好吃饭", "饮品": "咕咚咕咚", "西餐": "刀叉伺候", "日料": "一口一个"}\n希望符合要求。'
+
+    with patch("app.routers.trending.OpenAI") as mock_openai:
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_client.chat.completions.create.return_value = make_openai_response(noisy)
+
+        resp = client.get("/api/trending/categories/annotated")
+
+    assert resp.status_code == 200
+    data = {c["name"]: c["note"] for c in resp.json()["categories"]}
+    assert data["正餐"] == "好好吃饭"
+    assert data["日料"] == "一口一个"
+
+
+def test_annotated_categories_empty_llm_content(client, sample_trends, monkeypatch):
+    """content 为空时静默降级为 null，不抛错。"""
+    monkeypatch.setattr("app.routers.trending.OPENROUTER_API_KEY", "test-key")
+
+    with patch("app.routers.trending.OpenAI") as mock_openai:
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_client.chat.completions.create.return_value = make_openai_response("")
+
+        resp = client.get("/api/trending/categories/annotated")
+
+    assert resp.status_code == 200
+    assert all(c["note"] is None for c in resp.json()["categories"])
