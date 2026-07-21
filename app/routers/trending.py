@@ -1,13 +1,26 @@
+import asyncio
 import json
+import logging
 from datetime import date, datetime, time, timezone
 
+import openai
+from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import (
+    LLM_TIMEOUT_SECONDS,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_MODEL,
+)
 from app.database import get_db
-from app.models import FoodDigest, FoodTrend, FoodTrendSnapshot
+from app.models import CategoryNote, FoodDigest, FoodTrend, FoodTrendSnapshot
+from app.routers.recommend import _strip_code_fence
 from app.schemas import (
+    AnnotatedCategoriesResponse,
+    AnnotatedCategory,
     CrawlResult,
     FoodDigestOut,
     FoodTrendImport,
@@ -16,6 +29,8 @@ from app.schemas import (
     TrendHistoryResponse,
     TrendingResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/trending", tags=["trending"])
 
@@ -157,6 +172,73 @@ def get_categories(db: Session = Depends(get_db)):
         .all()
     )
     return sorted(rows)
+
+
+CATEGORY_NOTES_PROMPT = """你是一位中文文案高手。为每个美食分类写一句 4-6 个字的俏皮小注，用在菜单格子的分类名下方。
+风格参考（已定稿，勿改动这些示例本身）：随便→大厨看着办、家常下饭→妈妈味道、嗦粉吃面→一碗入魂、火锅烫涮→咕嘟咕嘟、烧烤撸串→滋滋冒油、奶茶续命→快乐水源、深夜食堂→灯火可亲。
+要求：每条 4-6 个中文字，贴合分类气质，不含 emoji、标点、英文。
+返回格式（纯JSON，无markdown）：{"分类名1": "小注1", "分类名2": "小注2"}"""
+
+
+def generate_category_notes_via_llm(categories: list[str]) -> dict[str, str]:
+    """Synchronously generate menu-cell notes for the given categories."""
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=OPENROUTER_API_KEY,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    categories_text = "、".join(f"「{category}」" for category in categories)
+    message = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        max_tokens=2048,
+        messages=[
+            {"role": "system", "content": CATEGORY_NOTES_PROMPT},
+            {"role": "user", "content": f"请为这些分类各写一条小注：{categories_text}。"},
+        ],
+    )
+    raw_text = _strip_code_fence((message.choices[0].message.content or "").strip())
+    data = json.loads(raw_text)
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str) and v.strip()}
+
+
+@router.get("/categories/annotated", response_model=AnnotatedCategoriesResponse)
+async def get_categories_annotated(db: Session = Depends(get_db)):
+    """分类列表 + 菜单格小注；缺失的小注用 LLM 一次性补齐入库，失败时 note 为 null。"""
+    names = sorted(
+        db.execute(
+            select(FoodTrend.category)
+            .where(FoodTrend.category.is_not(None))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    notes: dict[str, str] = {
+        row.category: row.note
+        for row in db.query(CategoryNote).filter(CategoryNote.category.in_(names))
+    }
+    missing = [name for name in names if name not in notes]
+    if missing and OPENROUTER_API_KEY:
+        try:
+            generated = await asyncio.to_thread(
+                generate_category_notes_via_llm, missing
+            )
+            for category in missing:
+                note = (generated.get(category) or "").strip()[:20]
+                if note:
+                    db.add(CategoryNote(category=category, note=note))
+                    notes[category] = note
+            db.commit()
+        except (openai.OpenAIError, json.JSONDecodeError) as e:
+            db.rollback()
+            logger.warning("分类小注生成失败，本次返回 null: %s", e)
+    return AnnotatedCategoriesResponse(
+        categories=[
+            AnnotatedCategory(name=name, note=notes.get(name)) for name in names
+        ]
+    )
 
 
 @router.get("/sources", response_model=list[str])

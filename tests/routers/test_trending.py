@@ -273,3 +273,100 @@ def test_get_history_nonexistent_food(client):
     resp = client.get("/api/trending/history/不存在的食物")
     assert resp.status_code == 200
     assert resp.json()["history"] == []
+
+
+# ===== /api/trending/categories/annotated =====
+
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+import openai  # noqa: E402
+
+
+def make_openai_response(text: str):
+    response = MagicMock()
+    response.choices[0].message.content = text
+    return response
+
+
+def _seed_note(db, category: str, note: str):
+    from app.models import CategoryNote
+
+    db.add(CategoryNote(category=category, note=note))
+    db.commit()
+
+
+def test_annotated_categories_empty_db(client):
+    resp = client.get("/api/trending/categories/annotated")
+    assert resp.status_code == 200
+    assert resp.json()["categories"] == []
+
+
+def test_annotated_categories_all_cached_skips_llm(client, db, sample_trends, monkeypatch):
+    monkeypatch.setattr("app.routers.trending.OPENROUTER_API_KEY", "test-key")
+    for category, note in [("正餐", "好好吃饭"), ("饮品", "咕咚咕咚"), ("西餐", "刀叉伺候"), ("日料", "一口一个")]:
+        _seed_note(db, category, note)
+
+    with patch("app.routers.trending.OpenAI") as mock_openai:
+        resp = client.get("/api/trending/categories/annotated")
+
+    assert resp.status_code == 200
+    data = {c["name"]: c["note"] for c in resp.json()["categories"]}
+    assert data == {"正餐": "好好吃饭", "饮品": "咕咚咕咚", "西餐": "刀叉伺候", "日料": "一口一个"}
+    mock_openai.assert_not_called()
+
+
+def test_annotated_categories_generates_and_persists_missing(client, db, sample_trends, monkeypatch):
+    from app.models import CategoryNote
+
+    monkeypatch.setattr("app.routers.trending.OPENROUTER_API_KEY", "test-key")
+    _seed_note(db, "正餐", "好好吃饭")
+
+    llm_json = '{"饮品": "咕咚咕咚", "西餐": "刀叉伺候"}'  # 日料缺失 → note 应为 null
+    with patch("app.routers.trending.OpenAI") as mock_openai:
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_client.chat.completions.create.return_value = make_openai_response(llm_json)
+
+        resp = client.get("/api/trending/categories/annotated")
+
+    assert resp.status_code == 200
+    data = {c["name"]: c["note"] for c in resp.json()["categories"]}
+    assert data == {"正餐": "好好吃饭", "饮品": "咕咚咕咚", "西餐": "刀叉伺候", "日料": None}
+    saved = {row.category: row.note for row in db.query(CategoryNote).all()}
+    assert saved == {"正餐": "好好吃饭", "饮品": "咕咚咕咚", "西餐": "刀叉伺候"}
+
+    # 第二次请求：已入库的不再触发 LLM（只对仍缺失的日料再试一次）
+    with patch("app.routers.trending.OpenAI") as mock_openai_2:
+        mock_client_2 = MagicMock()
+        mock_openai_2.return_value = mock_client_2
+        mock_client_2.chat.completions.create.return_value = make_openai_response('{"日料": "一口一个"}')
+
+        resp2 = client.get("/api/trending/categories/annotated")
+
+    data2 = {c["name"]: c["note"] for c in resp2.json()["categories"]}
+    assert data2["日料"] == "一口一个"
+
+
+def test_annotated_categories_llm_failure_returns_null_notes(client, sample_trends, monkeypatch):
+    monkeypatch.setattr("app.routers.trending.OPENROUTER_API_KEY", "test-key")
+
+    with patch("app.routers.trending.OpenAI") as mock_openai:
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_client.chat.completions.create.side_effect = openai.OpenAIError("boom")
+
+        resp = client.get("/api/trending/categories/annotated")
+
+    assert resp.status_code == 200
+    assert all(c["note"] is None for c in resp.json()["categories"])
+
+
+def test_annotated_categories_without_api_key(client, sample_trends, monkeypatch):
+    monkeypatch.setattr("app.routers.trending.OPENROUTER_API_KEY", "")
+
+    with patch("app.routers.trending.OpenAI") as mock_openai:
+        resp = client.get("/api/trending/categories/annotated")
+
+    assert resp.status_code == 200
+    assert all(c["note"] is None for c in resp.json()["categories"])
+    mock_openai.assert_not_called()

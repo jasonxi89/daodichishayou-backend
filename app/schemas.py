@@ -26,6 +26,15 @@ class TrendingResponse(BaseModel):
     items: list[FoodTrendOut]
 
 
+class AnnotatedCategory(BaseModel):
+    name: str
+    note: str | None = None
+
+
+class AnnotatedCategoriesResponse(BaseModel):
+    categories: list[AnnotatedCategory]
+
+
 class FoodTrendImport(BaseModel):
     food_name: str
     source: str = "manual"

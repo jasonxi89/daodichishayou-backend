@@ -150,6 +150,17 @@ class FoodsCategoryCache(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class CategoryNote(Base):
+    """分类小注文案（AI 生成一次后永久缓存，供前端菜单格小字展示）。"""
+
+    __tablename__ = "category_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    note: Mapped[str] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class RecommendCache(Base):
     """食材组合与请求数量对应的完整推荐结果缓存。"""
 
