@@ -1,5 +1,5 @@
 # HANDOFF — 到底吃啥哟 · 后端
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-20 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-08-23 | 改动项目后请同步更新此文档
 
 ## 项目定位
 微信小程序「到底吃啥哟」的后端服务：一个 FastAPI + SQLite 的**美食热度 API**，帮用户解决"今天吃什么"。
@@ -72,7 +72,7 @@ docker compose up --build
 - **`/steps` 端点仍不复用无上下文本地菜谱**（防错配主食材/过敏原）：补全的 steps 主要惠及老端点 `/api/recommend` 本地秒回与降级链兜底；若要新流程复用真实菜谱（菜名精确匹配+食材相容），是后续可选小任务。
 - **`trend_type` 填充率低**：AI extractor 保守，靠日常爬虫渐进填充。
 - **A6 双模型竞速未实现**：该任务本来就是可选；现有降级链可配置 fast model 串行重试，不是双模型并发竞速。
-- **README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）：以本 HANDOFF 为准，有空可同步更新 README。
+- ~~**README.md 已过时**（还写着 Claude API / 150+ 词典 / 只列 trending 端点）~~ **已于 2026-08-23 完成**：README 已全面同步至 v1.15.1 实况（commit `0184e2f`，18 个业务端点、DeepSeek 直连、502 词典 / 15 分类、环境变量表与调度均已重写）。承载该改动的 `docs/readme-refresh` 分支已合并进 main 并于同日删除。
 
 ## 相关资源
 - 仓库: https://github.com/jasonxi89/daodichishayou-backend
