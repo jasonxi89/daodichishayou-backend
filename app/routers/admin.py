@@ -117,7 +117,7 @@ def _call_merge(client: OpenAI, batch: list[str]) -> list[dict]:
     )
     resp = client.chat.completions.create(
         model=OPENROUTER_MODEL,
-        max_tokens=8192,
+        max_tokens=16384,
         messages=[
             {"role": "system", "content": _MERGE_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

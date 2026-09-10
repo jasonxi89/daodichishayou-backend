@@ -99,7 +99,7 @@ def generate_quick_dishes_via_llm(
         prompt.append(f"不要重复：{'、'.join(exclude_dishes)}")
     message = _client().chat.completions.create(
         model=model or OPENROUTER_MODEL,
-        max_tokens=8192,
+        max_tokens=16384,
         messages=[
             {"role": "system", "content": QUICK_SYSTEM_PROMPT},
             {"role": "user", "content": "\n".join(prompt)},
@@ -150,7 +150,7 @@ def generate_steps_via_llm(
     """Synchronously generate the complete recipe for one selected dish."""
     message = _client().chat.completions.create(
         model=OPENROUTER_MODEL,
-        max_tokens=8192,
+        max_tokens=16384,
         messages=_steps_messages(
             dish_name,
             ingredients,
@@ -191,7 +191,7 @@ async def _stream_steps_from_llm(
     try:
         chunks = await client.chat.completions.create(
             model=OPENROUTER_MODEL,
-            max_tokens=8192,
+            max_tokens=16384,
             messages=_steps_messages(
                 dish_name,
                 ingredients,

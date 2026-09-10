@@ -7,8 +7,8 @@
 前端为独立仓库（Taro + React + TS），本仓库只负责后端。
 
 ## 当前状态
-- **开发版本**: v1.15.2（全部 LLM 调用切 `deepseek-flash` + max_tokens 上调，2026-09-10）
-- **生产版本/镜像 SHA**: v1.15.2 = 本仓库 main HEAD（2026-09-10 部署；回滚备份 compose `.bak.pre-flash` = v1.15.1 `ba2a1e5...` + 模型 `deepseek-v4-pro`）
+- **开发版本**: v1.15.3（全部 LLM 调用切 `deepseek-flash` + max_tokens 统一 16384，2026-09-10）
+- **生产版本/镜像 SHA**: v1.15.3 = 本仓库 main HEAD（2026-09-10 部署；回滚备份 compose `.bak.pre-flash` = v1.15.1 `ba2a1e5...` + 模型 `deepseek-v4-pro`）
 - **新端点 `GET /api/trending/categories/annotated`**（v1.15.0/1，供前端混血主题菜单格小字）：返回 `{categories:[{name,note}]}`；小注缺失时单次 LLM 批量生成→`category_notes` 表永久缓存（生产已生成 15 条，缓存命中 0.11s）；LLM 失败/无 key 时 note=null 静默降级，老端点 `/categories` 形状不变。⚠️ 解析必须截取 JSON 子串（v1.15.1 修复：deepseek 纯JSON prompt 仍可能带前后缀文字）
 - **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
 - **生产补全（2026-07-20 完成）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级**已尝试并失败**：`scripts/backfill_recipe_steps.py` 首个请求即 302→humancheck CAPTCHA 熔断（processed 1 / updated 0，日志 `/app/data/backfill_scrape.log`）——NAS 出口 IP 被下厨房风控锁定，短期勿重试；后续选项 = 等 IP 冷却 / 换代理出口 / 接受 llm 步骤为最终数据
@@ -20,7 +20,7 @@
 
 ## 技术栈与结构
 - **栈**: FastAPI 0.115 + SQLAlchemy 2.0 + SQLite（WAL 模式）+ APScheduler + httpx + BeautifulSoup4；LLM 走 **DeepSeek 官网直连**（`openai` SDK，非 anthropic）；Docker + GitHub Actions CI/CD
-- **LLM 网关**: openai SDK + env 决定渠道。**2026-07-17 起走 DeepSeek 官网直连**：`OPENROUTER_BASE_URL=https://api.deepseek.com`、`OPENROUTER_MODEL=deepseek-flash`（= DeepSeek-V4.1-Flash，**2026-09-10 切**，默认 thinking 开、reasoning 计入 max_tokens，故全部调用点 max_tokens 上调：quick 800→4096、其余→8192；官方 9/14 起 `deepseek-v4-pro` 也路由到 V4.1-Flash；此前 V4 flash 曾因快报文风干瘪换回 pro，V4.1 带 thinking 需重新观察快报文风；代码默认值也已改为直连 + `deepseek-flash`；官网模型名无 `deepseek/` 前缀；官网直连 + 自动上下文缓存后 pro 实测 recommend ~14s，远快于 OpenRouter 时代的 44s）。切模型/渠道只改 NAS compose env 后 recreate；调用形态 `client.chat.completions.create(...)`，读 `resp.choices[0].message.content`。回滚 OpenRouter：compose 备份 `.bak.preds-direct`
+- **LLM 网关**: openai SDK + env 决定渠道。**2026-07-17 起走 DeepSeek 官网直连**：`OPENROUTER_BASE_URL=https://api.deepseek.com`、`OPENROUTER_MODEL=deepseek-flash`（= DeepSeek-V4.1-Flash，**2026-09-10 切**，默认 thinking 开、reasoning 计入 max_tokens，故全部调用点 max_tokens 统一上调到 16384（留足余量）；官方 9/14 起 `deepseek-v4-pro` 也路由到 V4.1-Flash；此前 V4 flash 曾因快报文风干瘪换回 pro，V4.1 带 thinking 需重新观察快报文风；代码默认值也已改为直连 + `deepseek-flash`；官网模型名无 `deepseek/` 前缀；官网直连 + 自动上下文缓存后 pro 实测 recommend ~14s，远快于 OpenRouter 时代的 44s）。切模型/渠道只改 NAS compose env 后 recreate；调用形态 `client.chat.completions.create(...)`，读 `resp.choices[0].message.content`。回滚 OpenRouter：compose 备份 `.bak.preds-direct`
 - **目录**:
   ```
   app/

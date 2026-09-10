@@ -199,7 +199,7 @@ def _extract_batch(
 
     resp = client.chat.completions.create(
         model=OPENROUTER_MODEL,
-        max_tokens=8192,
+        max_tokens=16384,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
