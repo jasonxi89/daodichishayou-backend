@@ -199,7 +199,7 @@ def generate_category_notes_via_llm(categories: list[str]) -> dict[str, str]:
     categories_text = "、".join(f"「{category}」" for category in categories)
     message = client.chat.completions.create(
         model=OPENROUTER_MODEL,
-        max_tokens=2048,
+        max_tokens=8192,
         messages=[
             {"role": "system", "content": CATEGORY_NOTES_PROMPT},
             {"role": "user", "content": f"请为这些分类各写一条小注：{categories_text}。"},

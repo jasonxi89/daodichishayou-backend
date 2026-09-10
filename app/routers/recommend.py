@@ -139,7 +139,7 @@ def generate_dishes_via_llm(
     system_prompt = SYSTEM_PROMPT_EXTRA if allow_extra else SYSTEM_PROMPT
     message = client.chat.completions.create(
         model=model or OPENROUTER_MODEL,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[
             {"role": "system", "content": system_prompt},
             {
@@ -329,7 +329,7 @@ def generate_foods_by_category_via_llm(
     )
     message = client.chat.completions.create(
         model=OPENROUTER_MODEL,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[
             {"role": "system", "content": CATEGORY_FOODS_PROMPT},
             {
