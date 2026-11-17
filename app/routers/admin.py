@@ -1,24 +1,16 @@
 """管理端点 — 人工触发的一次性或低频操作（如 AI 别名合并）。"""
 
-import json
 import logging
 from datetime import datetime, timezone
 
-import openai
-from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import (
-    AI_CORE_RULES,
-    LLM_TIMEOUT_SECONDS,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_MODEL,
-)
+from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY
 from app.database import get_db
 from app.models import FoodAlias, FoodTrend
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +36,8 @@ _MERGE_SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 @router.post("/merge-aliases")
 def merge_aliases(db: Session = Depends(get_db)) -> dict:
     """扫描 food_trends 里所有 food_name，用 AI 生成 alias → canonical 映射。"""
-    if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=503, detail="OPENROUTER_API_KEY 未配置")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY 未配置")
 
     names = sorted({
         row for row in db.execute(
@@ -56,18 +48,13 @@ def merge_aliases(db: Session = Depends(get_db)) -> dict:
     if not names:
         return {"status": "ok", "groups_processed": 0, "aliases_created": 0}
 
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
     groups_processed = 0
     aliases_created = 0
 
     for i in range(0, len(names), _MERGE_BATCH_SIZE):
         batch = names[i:i + _MERGE_BATCH_SIZE]
         try:
-            batch_groups = _call_merge(client, batch)
+            batch_groups = _call_merge(batch)
         except Exception:
             logger.error("batch %d 合并失败", i // _MERGE_BATCH_SIZE, exc_info=True)
             continue
@@ -111,23 +98,9 @@ def merge_aliases(db: Session = Depends(get_db)) -> dict:
     }
 
 
-def _call_merge(client: OpenAI, batch: list[str]) -> list[dict]:
+def _call_merge(batch: list[str]) -> list[dict]:
     user_prompt = "请归并以下食物名（找出同义/变体）：\n" + "\n".join(
         f"- {n}" for n in batch
     )
-    resp = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": _MERGE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    raw = (resp.choices[0].message.content or "").strip()
-    if raw.startswith("```"):
-        lines = raw.split("\n")[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines)
-    data = json.loads(raw)
+    data = llm.parse_json_object(llm.complete_text(_MERGE_SYSTEM_PROMPT, user_prompt))
     return data.get("groups", [])

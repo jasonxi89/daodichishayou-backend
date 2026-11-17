@@ -4,7 +4,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
-APP_VERSION = "1.15.3"
+APP_VERSION = "1.16.0"
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'food_trends.db'}")
 API_PORT = int(os.getenv("API_PORT", "8900"))
@@ -17,10 +17,26 @@ CRAWL_SCHEDULE_HOURS = os.getenv(
 CRAWL_USE_SMART_SCHEDULE = os.getenv(
     "CRAWL_USE_SMART_SCHEDULE", "true"
 ).lower() == "true"
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek-flash")
-OPENROUTER_FAST_MODEL = os.getenv("OPENROUTER_FAST_MODEL", "")
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://api.deepseek.com")
+ALLOWED_CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def read_claude_effort() -> str:
+    """读取思考强度；填错就在启动时报错，免得每次调用才收到接口的 400。"""
+    effort = os.getenv("CLAUDE_EFFORT", "low")
+    if effort not in ALLOWED_CLAUDE_EFFORTS:
+        raise RuntimeError(
+            f"CLAUDE_EFFORT={effort!r} 无效，可选：{', '.join(ALLOWED_CLAUDE_EFFORTS)}"
+        )
+    return effort
+
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
+# 主模型失败后换它重试一次；留空即关闭
+CLAUDE_FAST_MODEL = os.getenv("CLAUDE_FAST_MODEL", "")
+# 本项目默认 low：预生成和爬虫每天几十到上百次调用，实时接口还要在小程序的超时内返回
+CLAUDE_EFFORT = read_claude_effort()
+# 两个用途：相邻数据之间的读超时（所有调用），以及实时接口单次调用的总时限
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 PREGEN_ENABLED = os.getenv("PREGEN_ENABLED", "true").lower() == "true"
 PREGEN_DAILY_BUDGET = int(os.getenv("PREGEN_DAILY_BUDGET", "120"))

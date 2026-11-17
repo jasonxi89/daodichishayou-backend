@@ -3,21 +3,18 @@
 import asyncio
 import json
 import logging
+from contextlib import aclosing
 from datetime import datetime, timezone
 
-import openai
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from openai import AsyncOpenAI, OpenAI
 from sqlalchemy.orm import Session
 
 from app.config import (
     AI_CORE_RULES,
+    ANTHROPIC_API_KEY,
+    CLAUDE_FAST_MODEL,
     LLM_TIMEOUT_SECONDS,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_FAST_MODEL,
-    OPENROUTER_MODEL,
 )
 from app.database import get_db
 from app.models import RecommendCache
@@ -29,6 +26,7 @@ from app.schemas import (
     QuickRecommendedDish,
     RecommendedDish,
 )
+from app.services import llm
 from app.services.recommend_fallback import get_fallback_recommendation
 from app.services.recommend_cache import (
     get_cached_recommendation,
@@ -55,31 +53,6 @@ STEPS_SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 {{"name":"菜名","summary":"20字内简介","ingredients":["食材 用量"],"steps":["步骤1"],"difficulty":"简单/中等/较难","cook_time":"约X分钟"}}"""
 
 
-def _strip_code_fence(raw_text: str) -> str:
-    if not raw_text.startswith("```"):
-        return raw_text
-    lines = raw_text.split("\n")[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines)
-
-
-def _client() -> OpenAI:
-    return OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-
-
-def _async_client() -> AsyncOpenAI:
-    return AsyncOpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-
-
 def generate_quick_dishes_via_llm(
     ingredients: list[str],
     count: int,
@@ -97,19 +70,10 @@ def generate_quick_dishes_via_llm(
         prompt.append("可额外购买1-2种主料。")
     if exclude_dishes:
         prompt.append(f"不要重复：{'、'.join(exclude_dishes)}")
-    message = _client().chat.completions.create(
-        model=model or OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": QUICK_SYSTEM_PROMPT},
-            {"role": "user", "content": "\n".join(prompt)},
-        ],
+    data = llm.parse_json_object(
+        llm.complete_text(QUICK_SYSTEM_PROMPT, "\n".join(prompt), model=model)
     )
-    raw_text = _strip_code_fence(
-        (message.choices[0].message.content or "").strip()
-    )
-    data = json.loads(raw_text)
-    if not isinstance(data, dict) or not isinstance(data.get("dishes"), list):
+    if not isinstance(data.get("dishes"), list):
         raise ValueError("LLM response must contain a dishes list")
     dishes = [
         QuickRecommendedDish.model_validate(item)
@@ -120,12 +84,12 @@ def generate_quick_dishes_via_llm(
     return dishes
 
 
-def _steps_messages(
+def _steps_user_prompt(
     dish_name: str,
     ingredients: list[str],
     preferences: str | None = None,
     allow_extra: bool = False,
-) -> list[dict[str, str]]:
+) -> str:
     context = [
         f"菜名：{dish_name}",
         f"用户现有食材：{', '.join(ingredients)}",
@@ -135,10 +99,7 @@ def _steps_messages(
     context.append(
         "允许额外购买1-2种主料" if allow_extra else "不得增加额外主料"
     )
-    return [
-        {"role": "system", "content": STEPS_SYSTEM_PROMPT},
-        {"role": "user", "content": "\n".join(context)},
-    ]
+    return "\n".join(context)
 
 
 def generate_steps_via_llm(
@@ -148,23 +109,15 @@ def generate_steps_via_llm(
     allow_extra: bool = False,
 ) -> RecommendedDish:
     """Synchronously generate the complete recipe for one selected dish."""
-    message = _client().chat.completions.create(
-        model=OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=_steps_messages(
-            dish_name,
-            ingredients,
-            preferences,
-            allow_extra,
-        ),
+    user_prompt = _steps_user_prompt(
+        dish_name,
+        ingredients,
+        preferences,
+        allow_extra,
     )
-    raw_text = _strip_code_fence(
-        (message.choices[0].message.content or "").strip()
-    )
-    dish = RecommendedDish.model_validate(json.loads(raw_text))
-    if not dish.ingredients or not dish.steps:
-        raise ValueError("LLM returned an incomplete dish")
-    return dish
+    raw_text = llm.complete_text(STEPS_SYSTEM_PROMPT, user_prompt)
+    # RecommendedDish 的校验已保证配料和步骤非空
+    return RecommendedDish.model_validate(llm.parse_json_object(raw_text))
 
 
 def _stream_frame(frame: dict) -> str:
@@ -185,30 +138,28 @@ async def _stream_steps_from_llm(
     allow_extra: bool = False,
 ):
     """Asynchronously stream NDJSON and own provider cancellation cleanup."""
+    user_prompt = _steps_user_prompt(
+        dish_name,
+        ingredients,
+        preferences,
+        allow_extra,
+    )
+    text_stream = llm.stream_text(
+        STEPS_SYSTEM_PROMPT,
+        user_prompt,
+        deadline_seconds=LLM_TIMEOUT_SECONDS,
+    )
     raw_parts: list[str] = []
-    client = _async_client()
-    chunks = None
     try:
-        chunks = await client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            max_tokens=16384,
-            messages=_steps_messages(
-                dish_name,
-                ingredients,
-                preferences,
-                allow_extra,
-            ),
-            stream=True,
-        )
-        async for chunk in chunks:
-            content = chunk.choices[0].delta.content
-            if not content:
-                continue
-            raw_parts.append(content)
-            yield _stream_frame({"type": "delta", "text": content})
+        # aclosing：小程序断开或这里出错时立刻关掉上游连接，不等垃圾回收
+        async with aclosing(text_stream) as texts:
+            async for text in texts:
+                raw_parts.append(text)
+                yield _stream_frame({"type": "delta", "text": text})
 
-        raw_text = _strip_code_fence("".join(raw_parts).strip())
-        dish = RecommendedDish.model_validate(json.loads(raw_text))
+        dish = RecommendedDish.model_validate(
+            llm.parse_json_object("".join(raw_parts))
+        )
         yield _stream_frame(
             {"type": "complete", "dish": dish.model_dump(mode="json")}
         )
@@ -219,12 +170,6 @@ async def _stream_steps_from_llm(
         yield _stream_frame(
             {"type": "error", "code": "provider_interrupted"}
         )
-    finally:
-        try:
-            if chunks is not None:
-                await chunks.close()
-        finally:
-            await client.close()
 
 
 def _quick_from_full(
@@ -300,7 +245,7 @@ async def recommend_quick(
             )
 
     fallback_allowed = not req.preferences and not req.allow_extra
-    if not OPENROUTER_API_KEY:
+    if not ANTHROPIC_API_KEY:
         fallback = get_fallback_recommendation(
             db,
             req.ingredients,
@@ -318,7 +263,7 @@ async def recommend_quick(
         )
     db.rollback()
     try:
-        dishes = await asyncio.to_thread(
+        dishes = await llm.run_realtime(
             generate_quick_dishes_via_llm,
             req.ingredients,
             count,
@@ -328,24 +273,24 @@ async def recommend_quick(
         )
         if not dishes:
             raise ValueError("LLM returned no dishes")
-    except (openai.OpenAIError, json.JSONDecodeError, ValueError) as error:
+    except (llm.LLMError, json.JSONDecodeError, ValueError) as error:
         logger.warning("Primary quick recommendation failed: %s", error)
         dishes = []
-        if OPENROUTER_FAST_MODEL:
+        if CLAUDE_FAST_MODEL:
             try:
-                dishes = await asyncio.to_thread(
+                dishes = await llm.run_realtime(
                     generate_quick_dishes_via_llm,
                     req.ingredients,
                     count,
                     req.preferences,
                     req.allow_extra,
                     req.exclude_dishes or None,
-                    model=OPENROUTER_FAST_MODEL,
+                    model=CLAUDE_FAST_MODEL,
                 )
                 if not dishes:
                     raise ValueError("Fast model returned no dishes")
             except (
-                openai.OpenAIError,
+                llm.LLMError,
                 json.JSONDecodeError,
                 ValueError,
             ) as fast_error:
@@ -397,10 +342,10 @@ async def recommend_steps(
             )
         return cached
 
-    if not OPENROUTER_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="OPENROUTER_API_KEY not configured",
+            detail="ANTHROPIC_API_KEY not configured",
         )
     db.rollback()
     if stream:
@@ -415,14 +360,14 @@ async def recommend_steps(
         )
 
     try:
-        return await asyncio.to_thread(
+        return await llm.run_realtime(
             generate_steps_via_llm,
             req.dish_name,
             req.ingredients,
             req.preferences,
             req.allow_extra,
         )
-    except (openai.OpenAIError, json.JSONDecodeError, ValueError) as exc:
+    except (llm.LLMError, json.JSONDecodeError, ValueError) as exc:
         logger.error("Dish steps generation failed: %s", exc)
         raise HTTPException(
             status_code=502,

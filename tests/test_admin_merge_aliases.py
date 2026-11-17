@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,10 +8,6 @@ from sqlalchemy.orm import Session
 from app.database import Base, engine as app_engine
 from app.main import app
 from app.models import FoodAlias, FoodTrend
-
-
-def make_openai_response(text: str):
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=text))])
 
 
 @pytest.fixture
@@ -31,11 +27,9 @@ def client():
 
 
 def test_merge_aliases_endpoint_returns_200(client):
-    with patch("app.routers.admin.OpenAI") as mock_openai, \
-         patch("app.routers.admin.OPENROUTER_API_KEY", "fake-key"):
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response('{"groups":[]}')
+    with patch("app.services.llm.complete_text") as mock_complete, \
+         patch("app.routers.admin.ANTHROPIC_API_KEY", "fake-key"):
+        mock_complete.return_value = '{"groups":[]}'
 
         resp = client.post("/api/admin/merge-aliases")
         assert resp.status_code == 200
@@ -49,11 +43,9 @@ def test_merge_aliases_writes_alias_and_updates_canonical(client):
         s.commit()
 
     ai_response = '{"groups":[{"canonical":"火锅","aliases":["川式火锅","重庆火锅"]}]}'
-    with patch("app.routers.admin.OpenAI") as mock_openai, \
-         patch("app.routers.admin.OPENROUTER_API_KEY", "fake-key"):
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(ai_response)
+    with patch("app.services.llm.complete_text") as mock_complete, \
+         patch("app.routers.admin.ANTHROPIC_API_KEY", "fake-key"):
+        mock_complete.return_value = ai_response
 
         resp = client.post("/api/admin/merge-aliases")
         data = resp.json()
@@ -76,6 +68,6 @@ def test_merge_aliases_writes_alias_and_updates_canonical(client):
 
 
 def test_merge_aliases_no_api_key_returns_error(client):
-    with patch("app.routers.admin.OPENROUTER_API_KEY", ""):
+    with patch("app.routers.admin.ANTHROPIC_API_KEY", ""):
         resp = client.post("/api/admin/merge-aliases")
         assert resp.status_code == 503

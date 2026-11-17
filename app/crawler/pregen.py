@@ -9,7 +9,7 @@ from typing import Iterator
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
-from app.config import OPENROUTER_MODEL, PREGEN_DAILY_BUDGET
+from app.config import CLAUDE_MODEL, PREGEN_DAILY_BUDGET
 from app.models import RecommendCache
 from app.routers.recommend import generate_dishes_via_llm, make_cache_key
 from app.schemas import IngredientRecommendResponse
@@ -90,7 +90,7 @@ def _upsert_cache(
     statement = insert(RecommendCache).values(
         cache_key=cache_key,
         payload=payload,
-        model=OPENROUTER_MODEL,
+        model=CLAUDE_MODEL,
         created_at=now,
         expires_at=expires_at,
     )
@@ -98,7 +98,7 @@ def _upsert_cache(
         index_elements=[RecommendCache.cache_key],
         set_={
             "payload": payload,
-            "model": OPENROUTER_MODEL,
+            "model": CLAUDE_MODEL,
             "created_at": now,
             "expires_at": expires_at,
         },

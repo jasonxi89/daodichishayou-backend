@@ -34,7 +34,7 @@ async def test_recommend_llm_does_not_block_event_loop(db, monkeypatch):
         ingredients=["番茄", "鸡蛋"],
         steps=["炒熟"],
     )
-    monkeypatch.setattr(recommend, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(recommend, "ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
         recommend,
         "generate_dishes_via_llm",
@@ -60,7 +60,7 @@ async def test_category_llm_does_not_block_event_loop(db, monkeypatch):
     from app.routers import recommend
 
     events: list[str] = []
-    monkeypatch.setattr(recommend, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(recommend, "ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
         recommend,
         "generate_foods_by_category_via_llm",
@@ -83,7 +83,7 @@ async def test_bulk_category_llm_does_not_block_event_loop(db, monkeypatch):
     from app.routers import recommend
 
     events: list[str] = []
-    monkeypatch.setattr(recommend, "OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(recommend, "ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
         recommend,
         "generate_bulk_foods_by_category_via_llm",

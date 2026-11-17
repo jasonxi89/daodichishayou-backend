@@ -1,11 +1,17 @@
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+import os
 
-from app.database import Base, get_db
-from app.main import app
+# 测试不依赖本机环境：配置在导入 app 时读取，所以先清掉 Claude 相关环境变量
+for _name in ("ANTHROPIC_API_KEY", "CLAUDE_MODEL", "CLAUDE_FAST_MODEL", "CLAUDE_EFFORT"):
+    os.environ.pop(_name, None)
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+from app.database import Base, get_db  # noqa: E402
+from app.main import app  # noqa: E402
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"  # in-memory
 
@@ -16,6 +22,20 @@ engine = create_engine(
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def forbid_real_claude_calls(monkeypatch):
+    """任何测试都不许真连 Claude：没打桩就走到客户端工厂的，直接失败。"""
+
+    def refuse_to_create_client():
+        raise AssertionError(
+            "测试里不允许真实调用 Claude 接口，请给 app.services.llm 打桩"
+        )
+
+    monkeypatch.setattr(
+        "app.services.llm._create_client", refuse_to_create_client
+    )
 
 
 @pytest.fixture(autouse=True)

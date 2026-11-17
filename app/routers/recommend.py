@@ -3,18 +3,14 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-import openai
-from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import (
     AI_CORE_RULES,
-    LLM_TIMEOUT_SECONDS,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_FAST_MODEL,
-    OPENROUTER_MODEL,
+    ANTHROPIC_API_KEY,
+    CLAUDE_FAST_MODEL,
+    CLAUDE_MODEL,
 )
 from app.database import get_db
 from app.models import FoodsCategoryCache
@@ -27,6 +23,7 @@ from app.schemas import (
     IngredientRecommendResponse,
     RecommendedDish,
 )
+from app.services import llm
 from app.services.recipe_search import search_local_recipes as _search_local_recipes
 from app.services.recommend_fallback import get_fallback_recommendation
 from app.services.recommend_cache import (
@@ -111,16 +108,6 @@ def build_user_prompt(
     return "\n".join(parts)
 
 
-def _strip_code_fence(raw_text: str) -> str:
-    """Remove an optional Markdown code fence from an LLM JSON response."""
-    if not raw_text.startswith("```"):
-        return raw_text
-    lines = raw_text.split("\n")[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines)
-
-
 def generate_dishes_via_llm(
     ingredients: list[str],
     count: int,
@@ -131,34 +118,18 @@ def generate_dishes_via_llm(
     model: str | None = None,
 ) -> list[RecommendedDish]:
     """Synchronously generate complete dishes through the configured LLM."""
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
     system_prompt = SYSTEM_PROMPT_EXTRA if allow_extra else SYSTEM_PROMPT
-    message = client.chat.completions.create(
-        model=model or OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": build_user_prompt(
-                    ingredients,
-                    count,
-                    preferences,
-                    allow_extra,
-                    exclude_dishes,
-                ),
-            },
-        ],
+    user_prompt = build_user_prompt(
+        ingredients,
+        count,
+        preferences,
+        allow_extra,
+        exclude_dishes,
     )
-    raw_text = _strip_code_fence(
-        (message.choices[0].message.content or "").strip()
+    data = llm.parse_json_object(
+        llm.complete_text(system_prompt, user_prompt, model=model)
     )
-    data = json.loads(raw_text)
-    if not isinstance(data, dict) or not isinstance(data.get("dishes"), list):
+    if not isinstance(data.get("dishes"), list):
         raise ValueError("LLM response must contain a dishes list")
     dishes = [
         RecommendedDish.model_validate(item)
@@ -211,7 +182,7 @@ async def recommend_by_ingredients(
             )
 
     fallback_allowed = not req.preferences and not req.allow_extra
-    if not OPENROUTER_API_KEY:
+    if not ANTHROPIC_API_KEY:
         fallback = get_fallback_recommendation(
             db,
             req.ingredients,
@@ -235,9 +206,9 @@ async def recommend_by_ingredients(
     ai_exclude = list(req.exclude_dishes) if req.exclude_dishes else []
     ai_exclude.extend(d.name for d in local_dishes)
 
-    used_model = OPENROUTER_MODEL
+    used_model = CLAUDE_MODEL
     try:
-        ai_dishes = await asyncio.to_thread(
+        ai_dishes = await llm.run_realtime(
             generate_dishes_via_llm,
             req.ingredients,
             ai_count,
@@ -247,24 +218,24 @@ async def recommend_by_ingredients(
         )
         if not ai_dishes:
             raise ValueError("LLM returned no dishes")
-    except (openai.OpenAIError, json.JSONDecodeError, ValueError) as error:
+    except (llm.LLMError, json.JSONDecodeError, ValueError) as error:
         logger.warning("Primary recommendation failed: %s", error)
-        if OPENROUTER_FAST_MODEL:
+        if CLAUDE_FAST_MODEL:
             try:
-                ai_dishes = await asyncio.to_thread(
+                ai_dishes = await llm.run_realtime(
                     generate_dishes_via_llm,
                     req.ingredients,
                     ai_count,
                     req.preferences,
                     req.allow_extra,
                     ai_exclude or None,
-                    model=OPENROUTER_FAST_MODEL,
+                    model=CLAUDE_FAST_MODEL,
                 )
                 if not ai_dishes:
                     raise ValueError("Fast model returned no dishes")
-                used_model = OPENROUTER_FAST_MODEL
+                used_model = CLAUDE_FAST_MODEL
             except (
-                openai.OpenAIError,
+                llm.LLMError,
                 json.JSONDecodeError,
                 ValueError,
             ) as fast_error:
@@ -322,26 +293,10 @@ def generate_foods_by_category_via_llm(
     count: int,
 ) -> list[str]:
     """Synchronously generate food names for one category."""
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
+    user_prompt = f"请列出{count}个属于「{category}」分类的食物名称。"
+    data = llm.parse_json_object(
+        llm.complete_text(CATEGORY_FOODS_PROMPT, user_prompt)
     )
-    message = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": CATEGORY_FOODS_PROMPT},
-            {
-                "role": "user",
-                "content": f"请列出{count}个属于「{category}」分类的食物名称。",
-            },
-        ],
-    )
-    raw_text = _strip_code_fence(
-        (message.choices[0].message.content or "").strip()
-    )
-    data = json.loads(raw_text)
     foods = data.get("foods", [])
     return foods if isinstance(foods, list) else []
 
@@ -363,7 +318,7 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
             category=req.category,
         )
 
-    if not OPENROUTER_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="No category source is currently available",
@@ -372,12 +327,12 @@ async def foods_by_category(req: GenerateFoodsRequest, db: Session = Depends(get
     count = max(1, min(req.count, 50))
 
     try:
-        foods = await asyncio.to_thread(
+        foods = await llm.run_realtime(
             generate_foods_by_category_via_llm,
             req.category,
             count,
         )
-    except openai.OpenAIError as e:
+    except llm.LLMError as e:
         logger.error("LLM API error: %s", e)
         raise HTTPException(
             status_code=502,
@@ -434,28 +389,11 @@ def generate_bulk_foods_by_category_via_llm(
     count: int,
 ) -> dict[str, list[str]]:
     """Synchronously generate food names for multiple categories."""
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
     categories_text = "、".join(f"「{category}」" for category in categories)
-    message = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": BULK_CATEGORY_FOODS_PROMPT},
-            {
-                "role": "user",
-                "content": f"请为以下分类各列出{count}个食物名称：{categories_text}",
-            },
-        ],
+    user_prompt = f"请为以下分类各列出{count}个食物名称：{categories_text}"
+    return llm.parse_json_object(
+        llm.complete_text(BULK_CATEGORY_FOODS_PROMPT, user_prompt)
     )
-    raw_text = _strip_code_fence(
-        (message.choices[0].message.content or "").strip()
-    )
-    data = json.loads(raw_text)
-    return data if isinstance(data, dict) else {}
 
 
 @router.post("/bulk-foods-by-category", response_model=BulkGenerateFoodsResponse)
@@ -486,19 +424,19 @@ async def bulk_foods_by_category(req: BulkGenerateFoodsRequest, db: Session = De
     if not uncached_categories:
         return BulkGenerateFoodsResponse(results=cached_results)
 
-    if not OPENROUTER_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="No category source is currently available",
         )
 
     try:
-        data = await asyncio.to_thread(
+        data = await llm.run_realtime(
             generate_bulk_foods_by_category_via_llm,
             uncached_categories,
             count,
         )
-    except openai.OpenAIError as e:
+    except llm.LLMError as e:
         logger.error("LLM API error: %s", e)
         raise HTTPException(
             status_code=502,

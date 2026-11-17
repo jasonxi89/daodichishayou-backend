@@ -4,10 +4,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def make_openai_response(text: str):
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=text))])
-
-
 @pytest.fixture
 def mock_ai_disabled():
     with patch("app.crawler.ai_extractor.AI_EXTRACT_ENABLED", False):
@@ -17,7 +13,7 @@ def mock_ai_disabled():
 @pytest.fixture
 def mock_ai_enabled():
     with patch("app.crawler.ai_extractor.AI_EXTRACT_ENABLED", True), \
-         patch("app.crawler.ai_extractor.OPENROUTER_API_KEY", "test-key"):
+         patch("app.crawler.ai_extractor.ANTHROPIC_API_KEY", "test-key"):
         yield
 
 
@@ -30,7 +26,7 @@ def test_extract_disabled(mock_ai_disabled):
 def test_extract_no_api_key():
     from app.crawler.ai_extractor import extract_foods_from_titles
     with patch("app.crawler.ai_extractor.AI_EXTRACT_ENABLED", True), \
-         patch("app.crawler.ai_extractor.OPENROUTER_API_KEY", ""):
+         patch("app.crawler.ai_extractor.ANTHROPIC_API_KEY", ""):
         result = extract_foods_from_titles(["酱香拿铁大火"])
         assert result == []
 
@@ -148,7 +144,7 @@ def _make_mock_db_session():
 
 def test_extract_deduplicates_titles(mock_ai_enabled):
     from app.crawler.ai_extractor import extract_foods_from_titles
-    mock_resp = make_openai_response(json.dumps({
+    mock_resp = json.dumps({
         "results": [
             {"title": "t1", "foods": [{"name": "酱香拿铁", "category": "饮品",
                                        "canonical_of": "拿铁", "trend_type": "event",
@@ -157,13 +153,11 @@ def test_extract_deduplicates_titles(mock_ai_enabled):
                                        "canonical_of": "拿铁", "trend_type": "event",
                                        "trend_context": "联名爆款"}]},
         ]
-    }))
+    })
     mock_db = _make_mock_db_session()
-    with patch("app.crawler.ai_extractor.OpenAI") as mock_cls, \
+    with patch("app.services.llm.complete_text") as mock_complete, \
          patch("app.crawler.ai_extractor.SessionLocal", return_value=mock_db):
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = mock_resp
+        mock_complete.return_value = mock_resp
         result = extract_foods_from_titles(["t1", "t2"])
 
     assert len(result) == 1
@@ -173,11 +167,9 @@ def test_extract_deduplicates_titles(mock_ai_enabled):
 def test_extract_api_error_handled(mock_ai_enabled):
     from app.crawler.ai_extractor import extract_foods_from_titles
     mock_db = _make_mock_db_session()
-    with patch("app.crawler.ai_extractor.OpenAI") as mock_cls, \
+    with patch("app.services.llm.complete_text") as mock_complete, \
          patch("app.crawler.ai_extractor.SessionLocal", return_value=mock_db):
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = RuntimeError("API error")
+        mock_complete.side_effect = RuntimeError("API error")
         result = extract_foods_from_titles(["酱香拿铁大火"])
 
     assert result == []

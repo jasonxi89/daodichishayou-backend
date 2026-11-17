@@ -1,13 +1,8 @@
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
-
-
-def make_openai_response(content_str: str):
-    """Create a mock OpenAI chat completions response."""
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=content_str))])
+from app.services.llm import LLMError
 
 
 VALID_DISHES_JSON = json.dumps({
@@ -27,7 +22,7 @@ VALID_DISHES_JSON = json.dumps({
 def test_recommend_no_api_key_and_no_fallback_returns_500(
     client, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     resp = client.post(
         "/api/recommend", json={"ingredients": ["无匹配测试食材"]}
     )
@@ -41,11 +36,9 @@ def test_recommend_empty_ingredients_returns_422(client):
 
 
 def test_recommend_success(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄", "鸡蛋"]})
         assert resp.status_code == 200
@@ -56,38 +49,32 @@ def test_recommend_success(client, monkeypatch):
 
 
 def test_recommend_count_clamped_to_max_5(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄"], "count": 10})
         assert resp.status_code == 200
-        # Check that the prompt used count=5 (clamped) — user content is messages[1]
-        call_args = mock_client.chat.completions.create.call_args
-        messages_content = call_args.kwargs["messages"][1]["content"]
+        # Check that the prompt used count=5 (clamped) — user prompt is the second argument
+        call_args = mock_complete.call_args
+        messages_content = call_args.args[1]
         assert "5" in messages_content
 
 
 def test_recommend_count_clamped_to_min_1(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄"], "count": 0})
         assert resp.status_code == 200
 
 
 def test_recommend_strips_markdown_fence(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
         fenced = f"```json\n{VALID_DISHES_JSON}\n```"
-        mock_client.chat.completions.create.return_value = make_openai_response(fenced)
+        mock_complete.return_value = fenced
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
         assert resp.status_code == 200
@@ -95,54 +82,45 @@ def test_recommend_strips_markdown_fence(client, monkeypatch):
 
 
 def test_recommend_json_parse_fail_returns_502(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response("invalid json {{{")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = "invalid json {{{"
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
         assert resp.status_code == 502
 
 
 def test_recommend_api_error_returns_502(client, monkeypatch):
-    import openai
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = openai.OpenAIError("API error")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.side_effect = LLMError("API error")
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
         assert resp.status_code == 502
 
 
 def test_recommend_with_preferences(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post(
             "/api/recommend", json={"ingredients": ["猪肉"], "preferences": "家常"}
         )
         assert resp.status_code == 200
-        call_args = mock_client.chat.completions.create.call_args
-        messages_content = call_args.kwargs["messages"][1]["content"]
+        call_args = mock_complete.call_args
+        messages_content = call_args.args[1]
         assert "家常" in messages_content
 
 
 def test_recommend_optional_dish_fields(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
         # No difficulty or cook_time
         minimal_json = json.dumps({
             "dishes": [{"name": "炒饭", "summary": "快手菜", "ingredients": ["米饭"], "steps": ["炒"]}]
         })
-        mock_client.chat.completions.create.return_value = make_openai_response(minimal_json)
+        mock_complete.return_value = minimal_json
 
         resp = client.post("/api/recommend", json={"ingredients": ["米饭"]})
         assert resp.status_code == 200
@@ -152,58 +130,49 @@ def test_recommend_optional_dish_fields(client, monkeypatch):
 
 
 def test_recommend_empty_dishes_list_returns_502(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(json.dumps({"dishes": []}))
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = json.dumps({"dishes": []})
 
         resp = client.post("/api/recommend", json={"ingredients": ["未知食材"]})
         assert resp.status_code == 502
 
 
 def test_recommend_allow_extra_uses_extra_prompt(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post(
             "/api/recommend",
             json={"ingredients": ["番茄"], "allow_extra": True},
         )
         assert resp.status_code == 200
-        call_args = mock_client.chat.completions.create.call_args
-        # system prompt is messages[0]["content"]
-        system_prompt = call_args.kwargs["messages"][0]["content"]
+        call_args = mock_complete.call_args
+        system_prompt = call_args.args[0]
         from app.routers.recommend import SYSTEM_PROMPT_EXTRA
         assert system_prompt == SYSTEM_PROMPT_EXTRA
 
 
 def test_recommend_default_uses_standard_prompt(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post(
             "/api/recommend",
             json={"ingredients": ["番茄"]},
         )
         assert resp.status_code == 200
-        call_args = mock_client.chat.completions.create.call_args
-        system_prompt = call_args.kwargs["messages"][0]["content"]
+        call_args = mock_complete.call_args
+        system_prompt = call_args.args[0]
         from app.routers.recommend import SYSTEM_PROMPT
         assert system_prompt == SYSTEM_PROMPT
 
 
 def test_recommend_extra_ingredients_parsed(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
         extra_json = json.dumps({
             "dishes": [
                 {
@@ -217,7 +186,7 @@ def test_recommend_extra_ingredients_parsed(client, monkeypatch):
                 }
             ]
         })
-        mock_client.chat.completions.create.return_value = make_openai_response(extra_json)
+        mock_complete.return_value = extra_json
 
         resp = client.post(
             "/api/recommend",
@@ -245,7 +214,7 @@ def _insert_recipe(db, name, ingredients_text, ingredients_json, steps_json, rat
 
 def test_recommend_local_hit(client, db, monkeypatch):
     """Local recipes satisfy count -> Claude API not called."""
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}, {"name": "鸡蛋", "amount": "3个"}]),
                    json.dumps([{"text": "切块"}, {"text": "炒熟"}]))
@@ -253,15 +222,13 @@ def test_recommend_local_hit(client, db, monkeypatch):
                    json.dumps([{"name": "番茄", "amount": "1个"}, {"name": "鸡蛋", "amount": "2个"}]),
                    json.dumps([{"text": "煮汤"}]))
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    with patch("app.services.llm.complete_text") as mock_complete:
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄", "鸡蛋"], "count": 2})
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["dishes"]) == 2
-        mock_client.chat.completions.create.assert_not_called()
+        mock_complete.assert_not_called()
 
 
 def test_recommend_local_partial_returns_local_only(client, db, monkeypatch):
@@ -269,81 +236,71 @@ def test_recommend_local_partial_returns_local_only(client, db, monkeypatch):
 
     LLM 补齐差额实测要 44-110s，远超前端超时；本地有结果就直接返回。
     """
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
                    json.dumps([{"text": "炒熟"}]))
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    with patch("app.services.llm.complete_text") as mock_complete:
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄", "鸡蛋"], "count": 2})
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["dishes"]) == 1
         assert data["dishes"][0]["name"] == "番茄炒蛋"
-        mock_client.chat.completions.create.assert_not_called()
+        mock_complete.assert_not_called()
 
 
 def test_recommend_local_empty(client, db, monkeypatch):
     """No local recipes -> falls through to AI."""
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post("/api/recommend", json={"ingredients": ["番茄"]})
         assert resp.status_code == 200
-        mock_client.chat.completions.create.assert_called_once()
+        mock_complete.assert_called_once()
 
 
 def test_recommend_local_skip_when_allow_extra(client, db, monkeypatch):
     """allow_extra=True -> skip local search, go straight to AI."""
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
                    json.dumps([{"text": "炒熟"}]))
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post("/api/recommend", json={
             "ingredients": ["番茄"], "allow_extra": True, "count": 1,
         })
         assert resp.status_code == 200
-        mock_client.chat.completions.create.assert_called_once()
+        mock_complete.assert_called_once()
 
 
 def test_recommend_local_skip_when_preferences(client, db, monkeypatch):
     """preferences set -> skip local search, go straight to AI."""
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     _insert_recipe(db, "番茄炒蛋", "番茄 鸡蛋",
                    json.dumps([{"name": "番茄", "amount": "2个"}]),
                    json.dumps([{"text": "炒熟"}]))
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post("/api/recommend", json={
             "ingredients": ["番茄"], "preferences": "清淡", "count": 1,
         })
         assert resp.status_code == 200
-        mock_client.chat.completions.create.assert_called_once()
+        mock_complete.assert_called_once()
 
 
 def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_DISHES_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_DISHES_JSON
 
         resp = client.post(
             "/api/recommend",
@@ -353,8 +310,8 @@ def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
             },
         )
         assert resp.status_code == 200
-        call_args = mock_client.chat.completions.create.call_args
-        user_content = call_args.kwargs["messages"][1]["content"]
+        call_args = mock_complete.call_args
+        user_content = call_args.args[1]
         assert "番茄炒蛋" in user_content
         assert "蛋花汤" in user_content
 
@@ -365,11 +322,9 @@ VALID_FOODS_JSON = json.dumps({"foods": ["火锅", "串串香", "麻婆豆腐"]}
 
 
 def test_foods_by_category_success(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_FOODS_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_FOODS_JSON
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 200
@@ -381,42 +336,35 @@ def test_foods_by_category_success(client, monkeypatch):
 def test_foods_by_category_no_key_or_cache_returns_500(
     client, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     resp = client.post("/api/foods-by-category", json={"category": "川菜"})
     assert resp.status_code == 500
     assert "No category source" in resp.json()["detail"]
 
 
 def test_foods_by_category_json_parse_fail(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response("not valid json")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = "not valid json"
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 502
 
 
 def test_foods_by_category_api_error(client, monkeypatch):
-    import openai
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = openai.OpenAIError("API error")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.side_effect = LLMError("API error")
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 502
 
 
 def test_foods_by_category_strips_markdown_fence(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
         fenced = f"```json\n{VALID_FOODS_JSON}\n```"
-        mock_client.chat.completions.create.return_value = make_openai_response(fenced)
+        mock_complete.return_value = fenced
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 200
@@ -424,24 +372,22 @@ def test_foods_by_category_strips_markdown_fence(client, monkeypatch):
 
 
 def test_foods_by_category_count_clamped(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_FOODS_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_FOODS_JSON
 
         # count=100 should be clamped to 50
         resp = client.post("/api/foods-by-category", json={"category": "川菜", "count": 100})
         assert resp.status_code == 200
-        call_args = mock_client.chat.completions.create.call_args
-        user_content = call_args.kwargs["messages"][1]["content"]
+        call_args = mock_complete.call_args
+        user_content = call_args.args[1]
         assert "50" in user_content
 
         # count=0 should be clamped to 1 (use different category to avoid cache hit)
         resp = client.post("/api/foods-by-category", json={"category": "粤菜", "count": 0})
         assert resp.status_code == 200
-        call_args = mock_client.chat.completions.create.call_args
-        user_content = call_args.kwargs["messages"][1]["content"]
+        call_args = mock_complete.call_args
+        user_content = call_args.args[1]
         assert "1" in user_content
 
 
@@ -452,7 +398,7 @@ def test_foods_by_category_cache_hit(client, db, monkeypatch):
     """When a valid (non-expired) cache exists, API should NOT be called."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
 
     # A valid cache remains available when the LLM key is absent.
     cache_entry = FoodsCategoryCache(
@@ -463,9 +409,7 @@ def test_foods_by_category_cache_hit(client, db, monkeypatch):
     db.add(cache_entry)
     db.commit()
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    with patch("app.services.llm.complete_text") as mock_complete:
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 200
@@ -473,26 +417,24 @@ def test_foods_by_category_cache_hit(client, db, monkeypatch):
         assert data["foods"] == ["回锅肉", "宫保鸡丁"]
         assert data["category"] == "川菜"
         # API should NOT have been called
-        mock_client.chat.completions.create.assert_not_called()
+        mock_complete.assert_not_called()
 
 
 def test_foods_by_category_cache_miss(client, db, monkeypatch):
     """When no cache exists, API should be called and result stored in cache."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_FOODS_JSON)
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_FOODS_JSON
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["foods"] == ["火锅", "串串香", "麻婆豆腐"]
         # API should have been called
-        mock_client.chat.completions.create.assert_called_once()
+        mock_complete.assert_called_once()
 
     # Verify cache was stored in DB
     cached = db.query(FoodsCategoryCache).filter(FoodsCategoryCache.category == "川菜").first()
@@ -506,7 +448,7 @@ def test_foods_by_category_cache_expired(client, db, monkeypatch):
     """When cache is expired, API should be called (expired cache ignored)."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
 
     # Insert an expired cache row
     cache_entry = FoodsCategoryCache(
@@ -517,17 +459,15 @@ def test_foods_by_category_cache_expired(client, db, monkeypatch):
     db.add(cache_entry)
     db.commit()
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_FOODS_JSON)
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_FOODS_JSON
 
         resp = client.post("/api/foods-by-category", json={"category": "川菜"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["foods"] == ["火锅", "串串香", "麻婆豆腐"]
         # API should have been called (expired cache ignored)
-        mock_client.chat.completions.create.assert_called_once()
+        mock_complete.assert_called_once()
 
 
 # --- bulk-foods-by-category tests ---
@@ -542,7 +482,7 @@ def test_bulk_all_cached(client, db, monkeypatch):
     """All cached categories work without an LLM API key."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
 
     for cat, foods in [("家常下饭", ["红烧肉", "番茄炒蛋"]), ("火锅烫涮", ["四川火锅", "酸汤火锅"])]:
         db.add(FoodsCategoryCache(
@@ -552,39 +492,35 @@ def test_bulk_all_cached(client, db, monkeypatch):
         ))
     db.commit()
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    with patch("app.services.llm.complete_text") as mock_complete:
 
         resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭", "火锅烫涮"]})
         assert resp.status_code == 200
         data = resp.json()
         assert data["results"]["家常下饭"] == ["红烧肉", "番茄炒蛋"]
         assert data["results"]["火锅烫涮"] == ["四川火锅", "酸汤火锅"]
-        mock_client.chat.completions.create.assert_not_called()
+        mock_complete.assert_not_called()
 
 
 def test_bulk_none_cached(client, monkeypatch):
     """When no categories are cached, API should be called once."""
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(VALID_BULK_FOODS_JSON)
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = VALID_BULK_FOODS_JSON
 
         resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭", "火锅烫涮"]})
         assert resp.status_code == 200
         data = resp.json()
         assert "家常下饭" in data["results"]
         assert "火锅烫涮" in data["results"]
-        mock_client.chat.completions.create.assert_called_once()
+        mock_complete.assert_called_once()
 
 
 def test_bulk_partial_cache(client, db, monkeypatch):
     """When some categories are cached and some are not, only uncached are sent to AI."""
     from app.models import FoodsCategoryCache
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
 
     # Cache only 家常下饭
     db.add(FoodsCategoryCache(
@@ -594,28 +530,26 @@ def test_bulk_partial_cache(client, db, monkeypatch):
     ))
     db.commit()
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    with patch("app.services.llm.complete_text") as mock_complete:
         # AI returns only the uncached category
         uncached_json = json.dumps({"火锅烫涮": ["四川火锅", "潮汕牛肉锅"]})
-        mock_client.chat.completions.create.return_value = make_openai_response(uncached_json)
+        mock_complete.return_value = uncached_json
 
         resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭", "火锅烫涮"]})
         assert resp.status_code == 200
         data = resp.json()
         assert data["results"]["家常下饭"] == ["回锅肉"]
         assert data["results"]["火锅烫涮"] == ["四川火锅", "潮汕牛肉锅"]
-        mock_client.chat.completions.create.assert_called_once()
-        # Verify the prompt only contains uncached category — user content is messages[1]
-        call_args = mock_client.chat.completions.create.call_args
-        user_content = call_args.kwargs["messages"][1]["content"]
+        mock_complete.assert_called_once()
+        # Verify the prompt only contains uncached category
+        call_args = mock_complete.call_args
+        user_content = call_args.args[1]
         assert "火锅烫涮" in user_content
         assert "家常下饭" not in user_content
 
 
 def test_bulk_no_key_or_cache_returns_500(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     resp = client.post(
         "/api/bulk-foods-by-category",
         json={"categories": ["家常下饭"]},
@@ -625,29 +559,24 @@ def test_bulk_no_key_or_cache_returns_500(client, monkeypatch):
 
 
 def test_bulk_claude_error(client, monkeypatch):
-    import openai
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = openai.OpenAIError("API error")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.side_effect = LLMError("API error")
         resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
         assert resp.status_code == 502
 
 
 def test_bulk_json_parse_error(client, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response("not valid json {{{")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = "not valid json {{{"
         resp = client.post("/api/bulk-foods-by-category", json={"categories": ["家常下饭"]})
         assert resp.status_code == 502
 
 
 def test_bulk_empty_categories(client, monkeypatch):
     """Empty categories list should return empty results without calling AI."""
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     resp = client.post("/api/bulk-foods-by-category", json={"categories": []})
     assert resp.status_code == 200
     assert resp.json()["results"] == {}

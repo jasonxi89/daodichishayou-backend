@@ -13,8 +13,9 @@ services:
       - ./data:/app/data
     environment:
       - TZ=Asia/Shanghai
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-v4-pro}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-5-5}
+      - CLAUDE_EFFORT=${CLAUDE_EFFORT:-low}
       - DAILYHOT_API_URL=http://dailyhot-api:6688
     depends_on:
       - dailyhot-api

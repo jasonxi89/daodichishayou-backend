@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -38,9 +38,7 @@ def _insert_cache(db, *, expires_at: datetime, count: int = 1):
     return row
 
 
-def _mock_openai_response():
-    content = json.dumps(CACHED_RESPONSE, ensure_ascii=False)
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=content))])
+LLM_REPLY = json.dumps(CACHED_RESPONSE, ensure_ascii=False)
 
 
 def test_atomic_cache_upsert_survives_concurrent_writers(tmp_path):
@@ -135,7 +133,7 @@ def test_make_cache_key_normalizes_ingredients_and_includes_count():
 
 
 def test_recommend_cache_hit_skips_local_and_llm(client, db, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     _insert_cache(
         db,
         count=1,
@@ -144,7 +142,7 @@ def test_recommend_cache_hit_skips_local_and_llm(client, db, monkeypatch):
 
     with (
         patch("app.routers.recommend._search_local_recipes") as local_search,
-        patch("app.routers.recommend.OpenAI") as openai_client,
+        patch("app.services.llm.complete_text") as mock_complete,
     ):
         response = client.post(
             "/api/recommend",
@@ -155,14 +153,14 @@ def test_recommend_cache_hit_skips_local_and_llm(client, db, monkeypatch):
     assert response.json()["dishes"] == CACHED_RESPONSE["dishes"]
     assert response.json()["input_ingredients"] == ["鸡蛋", "番茄"]
     local_search.assert_not_called()
-    openai_client.assert_not_called()
+    mock_complete.assert_not_called()
 
 
 def test_recommend_expired_cache_is_refreshed(client, db, monkeypatch):
     from app.models import RecommendCache
     from app.routers.recommend import make_cache_key
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     expired = _insert_cache(
         db,
         count=1,
@@ -170,17 +168,15 @@ def test_recommend_expired_cache_is_refreshed(client, db, monkeypatch):
     )
     old_expiry = expired.expires_at
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_openai.return_value.chat.completions.create.return_value = (
-            _mock_openai_response()
-        )
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = LLM_REPLY
         response = client.post(
             "/api/recommend",
             json={"ingredients": ["番茄", "鸡蛋"], "count": 1},
         )
 
     assert response.status_code == 200
-    mock_openai.return_value.chat.completions.create.assert_called_once()
+    mock_complete.assert_called_once()
     refreshed = (
         db.query(RecommendCache)
         .filter(
@@ -198,11 +194,9 @@ def test_recommend_cache_miss_stores_full_response(client, db, monkeypatch):
     from app.models import RecommendCache
     from app.routers.recommend import make_cache_key
 
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_openai.return_value.chat.completions.create.return_value = (
-            _mock_openai_response()
-        )
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = LLM_REPLY
         response = client.post(
             "/api/recommend",
             json={"ingredients": ["番茄", "鸡蛋"], "count": 1},
@@ -233,17 +227,15 @@ def test_recommend_cache_miss_stores_full_response(client, db, monkeypatch):
 def test_recommend_cache_is_bypassed_for_custom_requests(
     client, db, monkeypatch, request_overrides
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     _insert_cache(
         db,
         count=1,
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
     )
 
-    with patch("app.routers.recommend.OpenAI") as mock_openai:
-        mock_openai.return_value.chat.completions.create.return_value = (
-            _mock_openai_response()
-        )
+    with patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = LLM_REPLY
         response = client.post(
             "/api/recommend",
             json={
@@ -254,4 +246,4 @@ def test_recommend_cache_is_bypassed_for_custom_requests(
         )
 
     assert response.status_code == 200
-    mock_openai.return_value.chat.completions.create.assert_called_once()
+    mock_complete.assert_called_once()

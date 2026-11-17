@@ -1,14 +1,11 @@
 import json
-from datetime import date, datetime, timezone
-from unittest.mock import MagicMock, patch
+from datetime import date, datetime
+from unittest.mock import patch
 
 import pytest
 
 from app.models import FoodDigest, FoodTrend
-
-
-def make_openai_response(text: str):
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=text))])
+from app.services.llm import LLMError
 
 
 @pytest.fixture
@@ -27,32 +24,33 @@ def db_with_trends(db):
 
 def test_digest_skips_without_api_key(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", ""):
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", ""), \
+         patch("app.services.llm.complete_text") as mock_complete:
         result = generate_daily_digest(db_with_trends)
     assert result is None
+    mock_complete.assert_not_called()
 
 
 def test_digest_skips_empty_data(db):
     from app.crawler.ai_digest import generate_daily_digest
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "test-key"):
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
+         patch("app.services.llm.complete_text") as mock_complete:
         result = generate_daily_digest(db)
     assert result is None
+    mock_complete.assert_not_called()
 
 
 def test_digest_creates_new(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
 
-    mock_resp = make_openai_response(json.dumps({
+    reply = json.dumps({
         "summary": "今日火锅和奶茶最火",
         "top_foods": ["火锅", "奶茶", "螺蛳粉"],
         "recommendation": "天冷来份火锅",
-    }))
+    })
 
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "test-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_cls:
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = mock_resp
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
+         patch("app.services.llm.complete_text", return_value=reply):
         result = generate_daily_digest(db_with_trends)
 
     assert result is not None
@@ -74,17 +72,14 @@ def test_digest_upserts_same_day(db_with_trends):
     ))
     db_with_trends.commit()
 
-    mock_resp = make_openai_response(json.dumps({
+    reply = json.dumps({
         "summary": "新摘要",
         "top_foods": ["火锅"],
         "recommendation": "新推荐",
-    }))
+    })
 
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "test-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_cls:
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = mock_resp
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
+         patch("app.services.llm.complete_text", return_value=reply):
         result = generate_daily_digest(db_with_trends)
 
     assert result.summary == "新摘要"
@@ -96,26 +91,19 @@ def test_digest_upserts_same_day(db_with_trends):
 def test_digest_handles_api_error(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
 
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "test-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_cls:
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.side_effect = RuntimeError("API down")
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
+         patch("app.services.llm.complete_text", side_effect=LLMError("API down")):
         result = generate_daily_digest(db_with_trends)
 
     assert result is None
+    assert db_with_trends.query(FoodDigest).count() == 0
 
 
 def test_digest_handles_json_parse_error(db_with_trends):
     from app.crawler.ai_digest import generate_daily_digest
 
-    mock_resp = make_openai_response("not valid json")
-
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "test-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_cls:
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = mock_resp
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
+         patch("app.services.llm.complete_text", return_value="not valid json"):
         result = generate_daily_digest(db_with_trends)
 
     assert result is None
@@ -129,13 +117,9 @@ def test_digest_handles_markdown_code_block(db_with_trends):
         "top_foods": ["火锅"],
         "recommendation": "推荐",
     })
-    mock_resp = make_openai_response(f"```json\n{json_body}\n```")
 
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "test-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_cls:
-        mock_client = MagicMock()
-        mock_cls.return_value = mock_client
-        mock_client.chat.completions.create.return_value = mock_resp
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "test-key"), \
+         patch("app.services.llm.complete_text", return_value=f"```json\n{json_body}\n```"):
         result = generate_daily_digest(db_with_trends)
 
     assert result is not None

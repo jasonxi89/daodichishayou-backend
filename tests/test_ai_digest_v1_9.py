@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -7,10 +7,6 @@ from sqlalchemy.orm import Session
 from app.crawler.ai_digest import generate_daily_digest
 from app.database import Base
 from app.models import FoodDigest, FoodTrend
-
-
-def make_openai_response(text: str):
-    return MagicMock(choices=[MagicMock(message=MagicMock(content=text))])
 
 
 @pytest.fixture
@@ -36,19 +32,16 @@ def test_digest_prompt_includes_trend_type_and_context(db):
     ))
     db.commit()
 
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "fake-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_anth:
-        mock_client = MagicMock()
-        mock_anth.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "fake-key"), \
+         patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = (
             '{"summary":"s","top_foods":["围炉煮茶"],"recommendation":"喝茶"}'
         )
 
         generate_daily_digest(db)
 
-        call_args = mock_client.chat.completions.create.call_args
-        # User content is messages[1] (messages[0] is the system message)
-        user_content = call_args.kwargs["messages"][1]["content"]
+        call_args = mock_complete.call_args
+        user_content = call_args.args[1]
         assert "type:seasonal" in user_content
         assert "入冬社交茶饮" in user_content
         assert "type:evergreen" in user_content
@@ -62,19 +55,16 @@ def test_digest_system_prompt_explains_trend_types(db):
     ))
     db.commit()
 
-    with patch("app.crawler.ai_digest.OPENROUTER_API_KEY", "fake-key"), \
-         patch("app.crawler.ai_digest.OpenAI") as mock_anth:
-        mock_client = MagicMock()
-        mock_anth.return_value = mock_client
-        mock_client.chat.completions.create.return_value = make_openai_response(
+    with patch("app.crawler.ai_digest.ANTHROPIC_API_KEY", "fake-key"), \
+         patch("app.services.llm.complete_text") as mock_complete:
+        mock_complete.return_value = (
             '{"summary":"s","top_foods":[],"recommendation":""}'
         )
 
         generate_daily_digest(db)
 
-        call_args = mock_client.chat.completions.create.call_args
-        # System prompt is messages[0]["content"]
-        system_prompt = call_args.kwargs["messages"][0]["content"]
+        call_args = mock_complete.call_args
+        system_prompt = call_args.args[0]
         assert "event" in system_prompt
         assert "seasonal" in system_prompt
         assert "evergreen" in system_prompt

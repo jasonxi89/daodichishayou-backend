@@ -4,18 +4,12 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
-from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import (
-    AI_CORE_RULES,
-    LLM_TIMEOUT_SECONDS,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_MODEL,
-)
+from app.config import AI_CORE_RULES, ANTHROPIC_API_KEY
 from app.models import FoodDigest, FoodTrend
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +37,8 @@ _SYSTEM_PROMPT = f"""{AI_CORE_RULES}
 
 def generate_daily_digest(db: Session) -> FoodDigest | None:
     """基于当前热度数据生成今日美食趋势快报。"""
-    if not OPENROUTER_API_KEY:
-        logger.warning("未配置 OPENROUTER_API_KEY，跳过趋势总结")
+    if not ANTHROPIC_API_KEY:
+        logger.warning("未配置 ANTHROPIC_API_KEY，跳过趋势总结")
         return None
 
     # 查询当前热度 Top 30
@@ -73,39 +67,16 @@ def generate_daily_digest(db: Session) -> FoodDigest | None:
         )
     data_text = "\n".join(data_lines)
 
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
+    user_prompt = (
+        f"以下是今日各平台美食热度数据：\n\n{data_text}\n\n请生成今日美食趋势快报。"
     )
     try:
-        resp = client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            max_tokens=16384,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"以下是今日各平台美食热度数据：\n\n{data_text}\n\n请生成今日美食趋势快报。",
-                },
-            ],
-        )
-    except Exception:
+        data = llm.parse_json_object(llm.complete_text(_SYSTEM_PROMPT, user_prompt))
+    except llm.LLMError:
         logger.error("AI 趋势总结调用失败", exc_info=True)
         return None
-
-    raw_text = (resp.choices[0].message.content or "").strip()
-    if raw_text.startswith("```"):
-        lines = raw_text.split("\n")
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw_text = "\n".join(lines)
-
-    try:
-        data = json.loads(raw_text)
     except json.JSONDecodeError:
-        logger.error("AI 趋势总结 JSON 解析失败: %s", raw_text[:300])
+        logger.error("AI 趋势总结 JSON 解析失败", exc_info=True)
         return None
 
     today = datetime.combine(date.today(), datetime.min.time())

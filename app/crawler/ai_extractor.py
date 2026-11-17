@@ -5,21 +5,14 @@ import json
 import logging
 from dataclasses import dataclass
 
-from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import (
-    AI_CORE_RULES,
-    AI_EXTRACT_ENABLED,
-    LLM_TIMEOUT_SECONDS,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_MODEL,
-)
+from app.config import AI_CORE_RULES, AI_EXTRACT_ENABLED, ANTHROPIC_API_KEY
 from app.crawler.base import FoodTrendItem  # noqa: F401  crawlers still use this
 from app.database import SessionLocal
 from app.models import AITitleCache
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +117,8 @@ def extract_foods_from_titles(titles: list[str]) -> list[ExtractedFoodItem]:
         logger.info("AI 提取已禁用")
         return []
 
-    if not OPENROUTER_API_KEY:
-        logger.warning("未配置 OPENROUTER_API_KEY，跳过 AI 提取")
+    if not ANTHROPIC_API_KEY:
+        logger.warning("未配置 ANTHROPIC_API_KEY，跳过 AI 提取")
         return []
 
     if not titles:
@@ -180,12 +173,6 @@ def _extract_batch(
     titles: list[str],
 ) -> tuple[list[ExtractedFoodItem], dict[str, list[dict]]]:
     """对一批标题调用 Claude 提取食物，返回 (items, {title: [food_dicts]})。"""
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-
     titles_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles))
     user_prompt = f"""请对以下热搜标题提取食物 + 归因。
 
@@ -197,39 +184,17 @@ def _extract_batch(
 
 如果某个标题没有食物，其 foods 为空数组。"""
 
-    resp = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-
-    return _parse_response((resp.choices[0].message.content or ""), titles)
+    return _parse_response(llm.complete_text(_SYSTEM_PROMPT, user_prompt), titles)
 
 
 def _parse_response(
     text: str, original_titles: list[str]
 ) -> tuple[list[ExtractedFoodItem], dict[str, list[dict]]]:
     """解析 Claude 返回的 JSON，返回 items 和 title→foods 映射。"""
-    json_text = text.strip()
-    if json_text.startswith("```"):
-        lines = json_text.split("\n")
-        json_lines = []
-        in_block = False
-        for line in lines:
-            if line.strip().startswith("```"):
-                in_block = not in_block
-                continue
-            if in_block:
-                json_lines.append(line)
-        json_text = "\n".join(json_lines)
-
     try:
-        data = json.loads(json_text)
+        data = llm.parse_json_object(text)
     except json.JSONDecodeError:
-        logger.warning("AI 返回的 JSON 解析失败: %s", text[:200])
+        # parse_json_object 已经把回复开头记进日志；这一批按“没提取到”处理
         return [], {}
 
     items: list[ExtractedFoodItem] = []

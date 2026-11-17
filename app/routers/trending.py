@@ -1,23 +1,14 @@
-import asyncio
 import json
 import logging
 from datetime import date, datetime, time, timezone
 
-import openai
-from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.config import (
-    LLM_TIMEOUT_SECONDS,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_MODEL,
-)
+from app.config import ANTHROPIC_API_KEY
 from app.database import get_db
 from app.models import CategoryNote, FoodDigest, FoodTrend, FoodTrendSnapshot
-from app.routers.recommend import _strip_code_fence
 from app.schemas import (
     AnnotatedCategoriesResponse,
     AnnotatedCategory,
@@ -29,6 +20,7 @@ from app.schemas import (
     TrendHistoryResponse,
     TrendingResponse,
 )
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -180,39 +172,13 @@ CATEGORY_NOTES_PROMPT = """你是一位中文文案高手。为每个美食分�
 返回格式（纯JSON，无markdown）：{"分类名1": "小注1", "分类名2": "小注2"}"""
 
 
-def _extract_json_object(raw_text: str) -> str:
-    """截取首个 { 到末个 } 的子串，容忍模型在 JSON 前后加说明文字。"""
-    start = raw_text.find("{")
-    end = raw_text.rfind("}")
-    if start == -1 or end <= start:
-        return ""
-    return raw_text[start:end + 1]
-
-
 def generate_category_notes_via_llm(categories: list[str]) -> dict[str, str]:
     """Synchronously generate menu-cell notes for the given categories."""
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
     categories_text = "、".join(f"「{category}」" for category in categories)
-    message = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        max_tokens=16384,
-        messages=[
-            {"role": "system", "content": CATEGORY_NOTES_PROMPT},
-            {"role": "user", "content": f"请为这些分类各写一条小注：{categories_text}。"},
-        ],
+    user_prompt = f"请为这些分类各写一条小注：{categories_text}。"
+    data = llm.parse_json_object(
+        llm.complete_text(CATEGORY_NOTES_PROMPT, user_prompt)
     )
-    raw_text = _strip_code_fence((message.choices[0].message.content or "").strip())
-    json_text = _extract_json_object(raw_text)
-    if not json_text:
-        logger.warning("分类小注响应中无 JSON 对象，响应前 200 字: %r", raw_text[:200])
-        return {}
-    data = json.loads(json_text)
-    if not isinstance(data, dict):
-        return {}
     return {k: v for k, v in data.items() if isinstance(v, str) and v.strip()}
 
 
@@ -233,9 +199,9 @@ async def get_categories_annotated(db: Session = Depends(get_db)):
         for row in db.query(CategoryNote).filter(CategoryNote.category.in_(names))
     }
     missing = [name for name in names if name not in notes]
-    if missing and OPENROUTER_API_KEY:
+    if missing and ANTHROPIC_API_KEY:
         try:
-            generated = await asyncio.to_thread(
+            generated = await llm.run_realtime(
                 generate_category_notes_via_llm, missing
             )
             for category in missing:
@@ -244,7 +210,7 @@ async def get_categories_annotated(db: Session = Depends(get_db)):
                     db.add(CategoryNote(category=category, note=note))
                     notes[category] = note
             db.commit()
-        except (openai.OpenAIError, json.JSONDecodeError) as e:
+        except (llm.LLMError, json.JSONDecodeError) as e:
             db.rollback()
             logger.warning("分类小注生成失败，本次返回 null: %s", e)
     return AnnotatedCategoriesResponse(

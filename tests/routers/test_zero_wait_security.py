@@ -2,12 +2,12 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import openai
 import pytest
 from pydantic import ValidationError
 
 from app.models import Recipe, RecommendCache
 from app.schemas import RecommendedDish
+from app.services.llm import LLMError
 from app.services.recommend_cache import make_cache_key
 
 
@@ -87,7 +87,7 @@ def test_preferences_never_use_generic_offline_fallback(client, db, monkeypatch)
         }
     )
     _cache(db, ["豆腐"], unsafe)
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
 
     response = client.post(
         "/api/recommend",
@@ -111,7 +111,7 @@ def test_steps_cache_must_match_exact_ingredient_context(client, db, monkeypatch
     _cache(db, ["鸡肉"], chicken)
     _cache(db, ["虾"], shrimp)
     monkeypatch.setattr(
-        "app.routers.recommend_progressive.OPENROUTER_API_KEY", "test-key"
+        "app.routers.recommend_progressive.ANTHROPIC_API_KEY", "test-key"
     )
 
     with patch(
@@ -130,7 +130,7 @@ def test_steps_cache_must_match_exact_ingredient_context(client, db, monkeypatch
 def test_empty_llm_result_uses_offline_fallback_and_is_not_cached(
     client, db, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     db.add(
         Recipe(
             name="番茄炒蛋",
@@ -158,7 +158,7 @@ def test_empty_llm_result_uses_offline_fallback_and_is_not_cached(
 def test_legacy_endpoint_never_returns_incomplete_local_steps(
     client, db, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     db.add(
         Recipe(
             name="番茄拌饭",
@@ -281,11 +281,11 @@ def test_primary_and_fast_failure_do_not_bypass_preferences(
     client, db, monkeypatch
 ):
     _cache(db, ["豆腐"], SAFE_DISH)
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_FAST_MODEL", "fast")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("app.routers.recommend.CLAUDE_FAST_MODEL", "fast")
     with patch(
         "app.routers.recommend.generate_dishes_via_llm",
-        side_effect=openai.OpenAIError("down"),
+        side_effect=LLMError("down"),
     ):
         response = client.post(
             "/api/recommend",

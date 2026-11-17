@@ -28,7 +28,7 @@
 | APScheduler | 3.10.4 |
 | httpx | 0.28.1 |
 | BeautifulSoup4 | >= 4.12 |
-| openai SDK | 2.42.0，调用 OpenAI 兼容接口 |
+| anthropic SDK | 2.3.0，调用 Claude API |
 | 测试 | pytest >= 8.0、pytest-asyncio >= 0.23、pytest-cov >= 4.1 |
 | 交付 | Docker、GitHub Actions |
 
@@ -68,12 +68,14 @@ docker compose down
 
 ## LLM 渠道
 
-所有 LLM 功能都通过 `openai` SDK 的 `chat.completions` 接口调用，渠道、模型和超时完全由环境变量决定。环境变量仍沿用 `OPENROUTER_*` 历史命名，但并不限定只能使用 OpenRouter。
+所有 LLM 功能都通过官方 `anthropic` SDK 调用 Claude API（自 v1.16.0 起），统一封装在 `app/services/llm.py`：调用点只拼提示词、解析业务字段，客户端、请求参数、结束原因检查、日志和时限都在这个模块里。
 
-- **代码默认配置**：`OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`，`OPENROUTER_MODEL=deepseek/deepseek-v4-pro`。
-- **线上生产配置（自 2026-07-17 起）**：DeepSeek 官网直连，`OPENROUTER_BASE_URL=https://api.deepseek.com`，`OPENROUTER_MODEL=deepseek-v4-pro`。官网模型名没有 `deepseek/` 前缀。
-- 仓库内 `docker-compose.yml` 保持 OpenRouter 兼容默认值；生产环境由 NAS Compose 注入直连配置。切换模型或渠道只需修改 NAS Compose 环境变量并重新创建容器，不需要改代码。
-- LLM API 凭据只保存在未纳入版本控制的本地环境或 NAS Compose 环境变量中；不要写入源码或文档。
+- **默认配置**：`CLAUDE_MODEL=claude-opus-5-5`，`CLAUDE_EFFORT=low`。本项目每天有几十到上百次后台调用（预生成、爬虫提取、快报），实时接口还要在小程序的超时内返回，所以思考强度默认 `low`；可选 `low` / `medium` / `high` / `xhigh` / `max`，填错时服务启动即报错。
+- **请求形态**：一律流式（`client.beta.messages.stream`），`max_tokens=128000`，带官方拒答兜底（`fallbacks="default"`）。不传 `thinking`、`temperature`、`top_p`，Opus 5.5 不接受这些参数。
+- **时限**：`LLM_TIMEOUT_SECONDS` 是相邻数据之间的读超时；面向小程序的实时接口另外把它当作单次调用的总时限，超时即中止请求并走降级链。后台任务（预生成、爬虫提取、快报、别名归并、步骤补写）没有总时限。
+- **失败处理**：接口报错、限流、连不上、超时、拒答、输出被截断、空回复统一抛 `LLMError`，各调用点沿用原有的降级和错误码。每次调用结束记一行用量日志（模型、结束原因、输入输出 token、耗时）。
+- 切换模型或思考强度只需修改 NAS Compose 环境变量并重新创建容器，不需要改代码。
+- API 凭据只保存在未纳入版本控制的本地环境或 NAS Compose 环境变量中；不要写入源码或文档。
 
 ## 环境变量
 
@@ -86,11 +88,11 @@ docker compose down
 | `CRAWL_USE_SMART_SCHEDULE` | `true` | 启用固定时刻的智能抓取调度 |
 | `CRAWL_SCHEDULE_HOURS` | `7:00,10:30,16:30,22:00` | 智能调度时刻，时区为 `Asia/Shanghai` |
 | `CRAWL_INTERVAL_HOURS` | `6` | 关闭智能调度后使用的固定间隔小时数 |
-| `OPENROUTER_API_KEY` | 空 | 当前 LLM 渠道的凭据 |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI 兼容 API 地址 |
-| `OPENROUTER_MODEL` | `deepseek/deepseek-v4-pro` | 主模型；DeepSeek 官网直连时使用无供应商前缀的模型名 |
-| `OPENROUTER_FAST_MODEL` | 空 | 推荐主模型失败后的可选串行重试模型；空值表示关闭 |
-| `LLM_TIMEOUT_SECONDS` | `60` | 所有 LLM 请求超时秒数 |
+| `ANTHROPIC_API_KEY` | 空 | Claude API 凭据 |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | 主模型 |
+| `CLAUDE_EFFORT` | `low` | 思考强度：`low` / `medium` / `high` / `xhigh` / `max`；填错时启动报错 |
+| `CLAUDE_FAST_MODEL` | 空 | 推荐主模型失败后的可选串行重试模型；空值表示关闭 |
+| `LLM_TIMEOUT_SECONDS` | `60` | 相邻数据之间的读超时秒数；实时接口同时把它当作单次调用的总时限 |
 | `AI_EXTRACT_ENABLED` | `true` | 是否对词典未匹配的标题执行 AI 提取 |
 | `PREGEN_ENABLED` | `true` | 是否启用推荐结果预生成 |
 | `PREGEN_DAILY_BUDGET` | `120` | 每次预生成最多尝试的 LLM 调用数 |
@@ -204,7 +206,7 @@ app/
 │   ├── xiachufang.py
 │   ├── pregen.py
 │   └── scheduler.py
-├── services/                # 本地菜谱搜索、推荐缓存与降级链
+├── services/                # Claude API 封装（llm.py）、本地菜谱搜索、推荐缓存与降级链
 └── migrations/              # 启动时执行的幂等迁移
 scripts/                     # 菜谱步骤补全脚本
 tests/                       # pytest 测试

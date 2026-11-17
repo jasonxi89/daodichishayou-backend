@@ -2,10 +2,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import openai
-
 from app.models import Recipe, RecommendCache
 from app.schemas import QuickRecommendedDish, RecommendedDish
+from app.services.llm import LLMError
 from app.services.recommend_cache import make_cache_key
 
 
@@ -45,7 +44,7 @@ def _insert_old_cache(db):
 
 
 def test_recommend_without_key_uses_old_cache(client, db, monkeypatch):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     _insert_old_cache(db)
 
     response = client.post(
@@ -64,7 +63,7 @@ def test_recommend_without_key_uses_old_cache(client, db, monkeypatch):
 def test_recommend_old_cache_filters_excluded_dishes(
     client, db, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     _insert_old_cache(db)
 
     response = client.post(
@@ -85,7 +84,7 @@ def test_recommend_old_cache_filters_excluded_dishes(
 def test_legacy_recommend_without_key_rejects_incomplete_local_recipe(
     client, db, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
     db.add(
         Recipe(
             name="番茄拌饭",
@@ -114,14 +113,14 @@ def test_recommend_primary_failure_retries_configured_fast_model(
 ):
     from app.routers import recommend
 
-    monkeypatch.setattr(recommend, "OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setattr(recommend, "OPENROUTER_FAST_MODEL", "fast-model")
+    monkeypatch.setattr(recommend, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(recommend, "CLAUDE_FAST_MODEL", "fast-model")
     calls: list[str | None] = []
 
     def generate(*args, model=None, **kwargs):
         calls.append(model)
         if model is None:
-            raise openai.OpenAIError("primary down")
+            raise LLMError("primary down")
         return [FULL_DISHES[0]]
 
     with patch.object(recommend, "generate_dishes_via_llm", generate):
@@ -141,7 +140,7 @@ def test_recommend_primary_failure_retries_configured_fast_model(
 
 def test_quick_without_key_uses_old_cache(client, db, monkeypatch):
     monkeypatch.setattr(
-        "app.routers.recommend_progressive.OPENROUTER_API_KEY", ""
+        "app.routers.recommend_progressive.ANTHROPIC_API_KEY", ""
     )
     _insert_old_cache(db)
 
@@ -166,17 +165,17 @@ def test_quick_primary_failure_retries_fast_model(client, monkeypatch):
     from app.routers import recommend_progressive
 
     monkeypatch.setattr(
-        recommend_progressive, "OPENROUTER_API_KEY", "test-key"
+        recommend_progressive, "ANTHROPIC_API_KEY", "test-key"
     )
     monkeypatch.setattr(
-        recommend_progressive, "OPENROUTER_FAST_MODEL", "fast-model"
+        recommend_progressive, "CLAUDE_FAST_MODEL", "fast-model"
     )
     calls: list[str | None] = []
 
     def generate(*args, model=None, **kwargs):
         calls.append(model)
         if model is None:
-            raise openai.OpenAIError("primary down")
+            raise LLMError("primary down")
         return [
             QuickRecommendedDish(
                 name="番茄炒蛋",
@@ -201,7 +200,7 @@ def test_quick_primary_failure_retries_fast_model(client, monkeypatch):
 def test_recommend_without_key_and_without_fallback_returns_5xx(
     client, monkeypatch
 ):
-    monkeypatch.setattr("app.routers.recommend.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "")
 
     response = client.post(
         "/api/recommend",
