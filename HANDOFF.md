@@ -7,9 +7,10 @@
 前端为独立仓库（Taro + React + TS），本仓库只负责后端。
 
 ## 当前状态
-- **开发版本**: v1.16.0（全部 LLM 调用改走 **Claude API**：官方 `anthropic` SDK，`claude-opus-5-5`，思考强度 `low`，2026-11-16；在分支 `feature/claude-opus-5-5`，尚未合并 main）
-- **v1.16.0 部署 SHA**: 待主会话部署后回填。部署时 NAS compose 要把 `OPENROUTER_*` 三项换成 `ANTHROPIC_API_KEY` / `CLAUDE_MODEL=claude-opus-5-5` / `CLAUDE_EFFORT=low`，旧 compose 另存一份备份以便回滚
-- **生产版本/镜像 SHA**: 截至 2026-11-16 线上仍是 v1.15.3（SHA `c777c4d`，DeepSeek `deepseek-flash`，2026-09-10 部署；更早的回滚备份 compose `.bak.pre-flash` = v1.15.1 `ba2a1e5...` + 模型 `deepseek-v4-pro`）
+- **生产版本**: v1.16.0（全部 LLM 调用走 **Claude API**：官方 `anthropic` SDK，`claude-opus-5-5`，思考强度 `low`），已合并 main
+- **v1.16.0 部署 SHA**: `21a9b1b`（2026-11-16 部署）。NAS compose 的 env 是 `ANTHROPIC_API_KEY` / `CLAUDE_MODEL=claude-opus-5-5` / `CLAUDE_EFFORT=low`，文件里有 Claude key，权限 600 root。回滚到 DeepSeek 版用同目录备份 `daodichishayou-backend.yaml.bak.pre-claude`（= v1.15.3 `c777c4d` + `OPENROUTER_*`，镜像和 env 要一起换；更早的 `.bak.pre-flash` = v1.15.1 `ba2a1e5...` + `deepseek-v4-pro`）
+- **上线实测（2026-11-16，low 档）**: `/api/recommend/quick` 带偏好 6.8 秒（313 输入 / 604 输出 token，约 0.013 美元；切换前 DeepSeek 9.4 秒）；步骤流首帧 0.6 秒、总 7.0 秒（切换前首帧 3.6 秒）；容器内跑一条预生成 15.9 秒（611 / 1578 token，约 0.034 美元），缓存表 `model` 字段已是 `claude-opus-5-5`。事件循环和线程那条路（每次同步补全在工作线程里 `asyncio.run`）在 Linux 容器里实测正常
+- **为什么是 low**: 用户最初说全部 max。实测预生成那条提示词 max 档一次 125 秒、0.29 美元，而这个服务近 10 天 751 次调用全是定时任务（预生成每天 56 到 120 次 + 4 轮爬虫）、没有真实用户请求，全 max 每天要 20 到 40 美元，小程序实时接口也等不了；用户改选 low、预生成量不变，估算每天 3 到 5 美元
 - **新端点 `GET /api/trending/categories/annotated`**（v1.15.0/1，供前端混血主题菜单格小字）：返回 `{categories:[{name,note}]}`；小注缺失时单次 LLM 批量生成→`category_notes` 表永久缓存（生产已生成 15 条，缓存命中 0.11s）；LLM 失败/无 key 时 note=null 静默降级，老端点 `/categories` 形状不变。⚠️ 解析必须截取 JSON 子串（v1.15.1 修复：deepseek 纯JSON prompt 仍可能带前后缀文字）
 - **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
 - **生产补全（2026-07-20 完成）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级**已尝试并失败**：`scripts/backfill_recipe_steps.py` 首个请求即 302→humancheck CAPTCHA 熔断（processed 1 / updated 0，日志 `/app/data/backfill_scrape.log`）——NAS 出口 IP 被下厨房风控锁定，短期勿重试；后续选项 = 等 IP 冷却 / 换代理出口 / 接受 llm 步骤为最终数据
