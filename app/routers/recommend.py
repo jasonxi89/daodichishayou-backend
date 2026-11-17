@@ -285,7 +285,7 @@ CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 3. 尽量覆盖该分类下不同风格和地域的代表性食物
 
 返回格式（纯JSON，无markdown）：
-{{{{"foods": ["食物1", "食物2", "食物3"]}}}}"""
+{{"foods": ["食物1", "食物2", "食物3"]}}"""
 
 
 def generate_foods_by_category_via_llm(
@@ -381,7 +381,7 @@ BULK_CATEGORY_FOODS_PROMPT = f"""{AI_CORE_RULES}
 3. 尽量覆盖该分类下不同风格和地域的代表性食物
 
 返回格式（纯JSON，无markdown）：
-{{{{"分类名1": ["食物1", "食物2"], "分类名2": ["食物3", "食物4"]}}}}"""
+{{"分类名1": ["食物1", "食物2"], "分类名2": ["食物3", "食物4"]}}"""
 
 
 def generate_bulk_foods_by_category_via_llm(

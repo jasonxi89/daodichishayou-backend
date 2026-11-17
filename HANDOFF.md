@@ -14,7 +14,7 @@
 - **上线实测（2026-07-18）**: 预生成命中 `/api/recommend` **0.09s**；LLM 调用期间并发 health **0.03s**（事件循环修复生效）；冷门组合全量 LLM 路径 ~23s（新前端走 quick 端点后为 2-5s）
 - **生产补全（2026-07-20 完成）**: LLM 步骤补写**已完成** — recipes 656 条中 653 条 steps 已填充（steps_source=llm），仅 3 条失败；真实补爬升级**已尝试并失败**：`scripts/backfill_recipe_steps.py` 首个请求即 302→humancheck CAPTCHA 熔断（processed 1 / updated 0，日志 `/app/data/backfill_scrape.log`）——NAS 出口 IP 被下厨房风控锁定，短期勿重试；后续选项 = 等 IP 冷却 / 换代理出口 / 接受 llm 步骤为最终数据
 - **465 组合矩阵已铺满（2026-07-20 手动触发完成）**: fresh 243 → **462/465**（`/tmp/run_pregen.py` budget=465：attempts 223 / generated 219 / 4 次失败，日志 `/app/data/pregen_manual.log`，历时约 85 分钟）；剩 3 个组合与日常过期刷新由每日 03:30 cron（预算 120/天）兜底
-- **测试基线**: 450 tests pass / 96% coverage（CI 门控 95%）；本机 Python 3.13 和按新 requirements 新建的 3.12 环境都跑过，CI 是 3.11
+- **测试基线**: 451 tests pass / 96% coverage（CI 门控 95%）；本机 Python 3.13 和按新 requirements 新建的 3.12 环境都跑过，CI 是 3.11
 - **部署位置**: 极空间 Z4Pro NAS Docker，内网 `http://192.168.1.64:8900`，外网 `https://food.zuitian.ai`（Cloudflare Tunnel；AT&T 封 443 端口所以走 Tunnel 绕过）
 - **步骤数据补全（2026-07-18 用户决策，取代此前的"合规阻断"）**: 双通道并行——`scripts/backfill_steps_via_llm.py`（LLM 按菜名+配料补写，落 `steps_source='llm'`）+ `scripts/backfill_recipe_steps.py`（下厨房真实补爬，落 `'scraped'`，可覆盖 llm，反向禁止）。核心逻辑在 `app/crawler/steps_backfill.py`，逐行 commit 可断点续跑、连续 5 失败熔断、CAPTCHA 即停。**实测下厨房风控极敏感（10s 间隔第 2 个请求即 CAPTCHA）**，真实补爬默认 30s 间隔、预期进度缓慢
 - 步骤全空的根因已修（`xiachufang.py::_parse_detail_page`：JSON-LD 字符串形态 recipeInstructions 未处理 + 提前 return 挡住 DOM fallback；详见 `docs/plans/xiachufang-selector-notes.md`）
@@ -71,6 +71,7 @@ docker compose up --build
 - `LLM_TIMEOUT_SECONDS`（默认 60s）是读超时，实时接口另外当作单次调用的总时限，详见上面的「时限」。
 - **`llm.complete_text` 只能在没有事件循环的线程里调用**（内部用 `asyncio.run`）：`async def` 接口一律 `await llm.run_realtime(生成函数, ...)`，不要直接调，也不要换回裸的 `asyncio.to_thread`（那样没有总时限）。后台任务和脚本直接调即可。
 - **测试不许真连 Claude**：`tests/conftest.py` 在导入 app 前清掉 `ANTHROPIC_API_KEY` / `CLAUDE_*` 环境变量（这台 Windows 的用户级环境变量里有一个已失效的 key），并有一个 autouse 防护，没打桩就走到客户端工厂会直接失败。调用点的测试在 `app.services.llm.complete_text` / `stream_text` 上打桩；`tests/services/test_llm_with_real_sdk.py` 用真实 SDK 加假传输层校验请求体和 SSE 解析，升级 SDK 后先看它。
+- **两个分类食物提示词的 JSON 示例**曾多写一层花括号（f-string 里写了四个），v1.16.0 一并改对（单独一个提交）；以后在 f-string 提示词里写 JSON 示例，花括号写两个。
 - 诊断技巧：客户端超时断开的请求 uvicorn **不写 access log**（后端日志里会“隐形”，只留下大模型那几行）。每次调用成功或失败都有 `app.services.llm` 的日志：`claude done model=... stop_reason=... input_tokens=... output_tokens=... seconds=...`，报错行带 `request_id`，拿它可以在 Anthropic Console 里查到那次请求。
 
 ## 进行中 / TODO

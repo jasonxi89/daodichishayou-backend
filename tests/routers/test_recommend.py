@@ -321,6 +321,18 @@ def test_recommend_exclude_dishes_in_prompt(client, monkeypatch):
 VALID_FOODS_JSON = json.dumps({"foods": ["火锅", "串串香", "麻婆豆腐"]})
 
 
+def test_category_prompts_end_with_valid_json_example():
+    """提示词最后一行是给模型看的返回格式示例，必须是合法 JSON。"""
+    from app.routers.recommend import (
+        BULK_CATEGORY_FOODS_PROMPT,
+        CATEGORY_FOODS_PROMPT,
+    )
+
+    for prompt in (CATEGORY_FOODS_PROMPT, BULK_CATEGORY_FOODS_PROMPT):
+        example = prompt.strip().splitlines()[-1]
+        assert isinstance(json.loads(example), dict)
+
+
 def test_foods_by_category_success(client, monkeypatch):
     monkeypatch.setattr("app.routers.recommend.ANTHROPIC_API_KEY", "test-key")
     with patch("app.services.llm.complete_text") as mock_complete:
